@@ -1,0 +1,17 @@
+[package]
+name = "hdr-merge-master"
+version = "1.0.0"
+description = "HDR Merge Master - Desktop Application"
+authors = ["Savva Zakahrov"]
+license = "GPLv3-or-later"
+edition = "2024"
+
+[dependencies]
+eframe = "0.31"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.15"
+kamadak-exif = "0.5"
+chrono = "0.4"
+image = "0.25"
+libstacker = "0.1"  # Requires OpenCV - see instructions below
