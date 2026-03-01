@@ -72,7 +72,7 @@ impl HdrMergeApp {
             do_recursive: config.gui_settings.do_recursive,
             do_cleanup: config.gui_settings.do_cleanup,
             do_align: config.gui_settings.do_align,
-            use_opencv: config.gui_settings.use_opencv,
+            use_opencv_align: config.gui_settings.use_opencv_align,
             use_opencv_merge: config.gui_settings.use_opencv_merge,
             use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
             tonemap_operator: config.gui_settings.tonemap_operator.clone(),
@@ -139,7 +139,7 @@ impl HdrMergeApp {
                         self.gui_settings.do_recursive = config.gui_settings.do_recursive;
                         self.gui_settings.do_cleanup = config.gui_settings.do_cleanup;
                         self.gui_settings.do_align = config.gui_settings.do_align;
-                        self.gui_settings.use_opencv = config.gui_settings.use_opencv;
+                        self.gui_settings.use_opencv_align = config.gui_settings.use_opencv_align;
 
                         // Update profiles from config
                         self.profiles = if config.pp3_profiles.is_empty() {
@@ -544,7 +544,7 @@ impl eframe::App for HdrMergeApp {
                         });
 
                     ui.checkbox(&mut self.gui_settings.do_align,
-                        if self.gui_settings.use_opencv { "Align (OpenCV)" } else { "Align (Hugin)" }
+                        if self.gui_settings.use_opencv_align { "Align (OpenCV)" } else { "Align (Hugin)" }
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -60,7 +60,7 @@ impl SetupDialog {
                                 ui.checkbox(&mut config.gui_settings.do_recursive, "Recursive Processing");
                                 ui.checkbox(&mut config.gui_settings.do_cleanup, "Cleanup Temporary Files");
                                 ui.checkbox(&mut config.gui_settings.do_align, "Do Align");
-                                ui.checkbox(&mut config.gui_settings.use_opencv, "Use OpenCV (AlignMTB)");
+                                ui.checkbox(&mut config.gui_settings.use_opencv_align, "Use OpenCV (AlignMTB)");
                                 ui.checkbox(&mut config.gui_settings.use_opencv_merge, "Use OpenCV Merge (Debevec)");
                                 ui.checkbox(&mut config.gui_settings.use_opencv_tonemap, "Use OpenCV Tone Mapping");
 

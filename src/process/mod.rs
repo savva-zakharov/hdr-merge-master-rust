@@ -4,6 +4,7 @@
 //! - Aligning bracketed images (align_image_stack or OpenCV AlignMTB)
 //! - Merging to HDR (Blender or OpenCV MergeDebevec)
 //! - Tone mapping (Luminance CLI or OpenCV operators)
+//! - RAW processing (RawTherapee CLI)
 //! - Applying PP3 profiles
 //! - Cleaning up temporary files
 

@@ -126,7 +126,7 @@ pub struct GuiSettingsConfig {
     #[serde(default = "default_threads")]
     pub threads: u8,
     #[serde(default)]
-    pub use_opencv: bool,
+    pub use_opencv_align: bool,
     #[serde(default)]
     pub use_opencv_merge: bool,  // Use OpenCV MergeDebevec instead of Blender
     #[serde(default)]
@@ -198,7 +198,7 @@ impl Default for GuiSettingsConfig {
             ],
             recursive_max_depth: 1,
             threads: 6,
-            use_opencv: false,
+            use_opencv_align: false,
             use_opencv_merge: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
@@ -242,7 +242,7 @@ pub struct GuiSettings {
     pub do_recursive: bool,
     pub do_cleanup: bool,
     pub do_align: bool,
-    pub use_opencv: bool,
+    pub use_opencv_align: bool,
     pub use_opencv_merge: bool,
     pub use_opencv_tonemap: bool,
     pub tonemap_operator: String,
@@ -258,7 +258,7 @@ impl Default for GuiSettings {
             do_recursive: false,
             do_cleanup: false,
             do_align: false,
-            use_opencv: false,
+            use_opencv_align: false,
             use_opencv_merge: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
@@ -276,7 +276,7 @@ impl From<&GuiSettingsConfig> for GuiSettings {
             do_recursive: config.do_recursive,
             do_cleanup: config.do_cleanup,
             do_align: config.do_align,
-            use_opencv: config.use_opencv,
+            use_opencv_align: config.use_opencv_align,
             use_opencv_merge: config.use_opencv_merge,
             use_opencv_tonemap: config.use_opencv_tonemap,
             tonemap_operator: config.tonemap_operator.clone(),

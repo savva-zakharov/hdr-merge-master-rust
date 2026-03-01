@@ -45,7 +45,7 @@ pub struct Cli {
 
     /// Use OpenCV AlignMTB instead of align_image_stack
     #[arg(long)]
-    pub use_opencv: bool,
+    pub use_opencv_align: bool,
 
     /// Use OpenCV MergeDebevec instead of Blender
     #[arg(long)]

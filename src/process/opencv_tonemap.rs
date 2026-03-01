@@ -2,6 +2,9 @@
 //!
 //! This module provides multiple tone mapping operators for converting
 //! HDR images to displayable LDR images.
+//!
+//! Uses the image crate for loading EXR files (via exr crate),
+//! and OpenCV for tone mapping operators.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -9,10 +12,10 @@ use std::time::Instant;
 use opencv::{
     prelude::*,
     photo::{
-        create_tonemap_reinhard, create_tonemap_drago, 
+        create_tonemap_reinhard, create_tonemap_drago,
         create_tonemap_mantiuk,
     },
-    imgcodecs::{imread, imwrite, IMREAD_COLOR, IMWRITE_JPEG_QUALITY},
+    imgcodecs::{imwrite, IMWRITE_JPEG_QUALITY},
     core::{Vector, Mat},
 };
 
@@ -76,24 +79,35 @@ pub fn apply_tone_mapping(
 ) -> Result<Mat, String> {
     let mut tonemap_result = Mat::default();
 
+    // Ensure the input image is in the correct format (CV_32FC3)
+    // OpenCV tone mapping requires 32-bit float, 3 channels
+    let mut hdr_normalized = Mat::default();
+    if hdr_image.depth() != opencv::core::CV_32F {
+        // Convert to 32-bit float if needed
+        hdr_image.convert_to(&mut hdr_normalized, opencv::core::CV_32FC3, 1.0 / 65535.0, 0.0)
+            .map_err(|e| format!("Failed to convert image to 32-bit float: {}", e))?;
+    } else {
+        hdr_normalized = hdr_image.clone();
+    }
+
     // Create and apply tone mapping operator
     match params.operator {
         ToneMappingOperator::Reinhard => {
             let mut tonemap = create_tonemap_reinhard(params.intensity, params.contrast, params.saturation, params.detail)
                 .map_err(|e| format!("Failed to create Reinhard tonemap: {}", e))?;
-            tonemap.process(hdr_image, &mut tonemap_result)
+            tonemap.process(&hdr_normalized, &mut tonemap_result)
                 .map_err(|e| format!("Reinhard tone mapping failed: {}", e))?;
         }
         ToneMappingOperator::Drago => {
             let mut tonemap = create_tonemap_drago(params.intensity, params.contrast, params.saturation)
                 .map_err(|e| format!("Failed to create Drago tonemap: {}", e))?;
-            tonemap.process(hdr_image, &mut tonemap_result)
+            tonemap.process(&hdr_normalized, &mut tonemap_result)
                 .map_err(|e| format!("Drago tone mapping failed: {}", e))?;
         }
         ToneMappingOperator::Mantiuk => {
             let mut tonemap = create_tonemap_mantiuk(params.contrast, params.saturation, params.intensity)
                 .map_err(|e| format!("Failed to create Mantiuk tonemap: {}", e))?;
-            tonemap.process(hdr_image, &mut tonemap_result)
+            tonemap.process(&hdr_normalized, &mut tonemap_result)
                 .map_err(|e| format!("Mantiuk tone mapping failed: {}", e))?;
         }
     }
@@ -146,16 +160,43 @@ pub fn tone_map_hdr_to_jpg_opencv(
 
             println!("[OPENCV-TONEMAP] Processing: {}", filename);
 
-            // Load HDR image
-            let hdr_image = imread(&hdr_path.to_string_lossy(), IMREAD_COLOR)
+            // Load HDR image using image crate (supports EXR via exr crate)
+            let hdr_img = image::open(&hdr_path)
                 .map_err(|e| format!("Failed to load {}: {}", hdr_path.display(), e))?;
+
+            // Convert to 32-bit float RGB for OpenCV tone mapping
+            let rgb_img = hdr_img.to_rgb32f();
+            let (width, height) = rgb_img.dimensions();
             
-            if hdr_image.empty() {
-                return Err(format!("Loaded empty image from {}", hdr_path.display()));
+            // Create OpenCV Mat from image data
+            let pixels = rgb_img.as_raw();
+            
+            // Create 3-channel 32-bit float Mat with correct size
+            let mut hdr_mat = Mat::new_rows_cols_with_default(height as i32, width as i32, opencv::core::CV_32FC3, opencv::core::Scalar::default())
+                .map_err(|e| format!("Failed to create Mat: {}", e))?;
+            
+            // Copy pixel data (image crate uses RGB, OpenCV expects BGR)
+            // Get raw data pointer and copy manually
+            let mat_data = hdr_mat.data_mut();
+            if mat_data.is_null() {
+                return Err("Failed to get Mat data pointer".to_string());
+            }
+            
+            for (i, pixel) in pixels.chunks(3).enumerate() {
+                let idx = i * 3 * 4; // 3 channels * 4 bytes per f32
+                unsafe {
+                    // Convert RGB to BGR for OpenCV and write as f32
+                    let b_ptr = mat_data.add(idx) as *mut f32;
+                    let g_ptr = mat_data.add(idx + 4) as *mut f32;
+                    let r_ptr = mat_data.add(idx + 8) as *mut f32;
+                    *b_ptr = pixel[2];
+                    *g_ptr = pixel[1];
+                    *r_ptr = pixel[0];
+                }
             }
 
             // Apply tone mapping
-            let ldr_image = apply_tone_mapping(&hdr_image, params)?;
+            let ldr_image = apply_tone_mapping(&hdr_mat, params)?;
 
             // Generate output JPG path
             let jpg_path = jpg_folder.join(format!("{}.jpg", hdr_path.file_stem().unwrap().to_string_lossy()));

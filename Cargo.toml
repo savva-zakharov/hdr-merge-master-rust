@@ -22,3 +22,5 @@ rayon = "1.11"
 clap = { version = "4.4", features = ["derive"] }
 # Directory paths
 dirs = "5.0"
+# EXR file format support (pure Rust)
+exr = "1.7"

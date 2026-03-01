@@ -1,7 +1,8 @@
-//! OpenCV-based HDR merging using MergeDebevec algorithm
+//! HDR merging using OpenCV for processing and exr crate for EXR output
 //!
-//! This module provides an alternative to Blender for HDR creation using
-//! OpenCV's MergeDebevec algorithm with CalibrateDebevec for camera response.
+//! This module provides HDR creation using:
+//! - OpenCV's MergeDebevec for HDR merging
+//! - exr crate (pure Rust) for EXR file writing
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -9,11 +10,12 @@ use std::time::Instant;
 use opencv::{
     prelude::*,
     photo::{create_calibrate_debevec, create_merge_debevec},
-    imgcodecs::{imread, imwrite, IMREAD_COLOR},
+    imgcodecs::{imread, IMREAD_COLOR},
     core::{Vector, Mat},
 };
 
 /// Merge bracketed images into HDR using OpenCV's MergeDebevec algorithm
+/// and save as EXR using the exr crate
 ///
 /// # Arguments
 /// * `source_files` - List of bracketed image paths (different exposures)
@@ -65,7 +67,6 @@ pub fn merge_with_debevec(
     }
 
     // Calibrate camera response using CalibrateDebevec
-    // Parameters: samples (number of pixel samples), lambda (smoothness), random (random sampling)
     let mut calibrate = create_calibrate_debevec(100, 1.0, false)
         .map_err(|e| format!("Failed to create CalibrateDebevec: {}", e))?;
     
@@ -91,33 +92,10 @@ pub fn merge_with_debevec(
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
     }
 
-    // Save HDR as 32-bit float EXR (standard HDR format)
-    // Note: Requires OpenCV to be built with EXR support (OPENCV_IO_ENABLE_OPENEXR)
-    let params: Vector<i32> = vec![
-        opencv::imgcodecs::IMWRITE_EXR_TYPE as i32,
-        opencv::imgcodecs::IMWRITE_EXR_TYPE_FLOAT as i32,  // 32-bit float
-    ].into_iter().collect();
+    // Convert OpenCV Mat to exr format and save
+    save_hdr_to_exr(&hdr, output_path)?;
 
-    // Try to save as EXR first
-    let saved_path = match imwrite(&output_path.with_extension("exr").to_string_lossy(), &hdr, &params) {
-        Ok(_) => {
-            println!("    [OPENCV-MERGE] Saved HDR EXR to {}", output_path.with_extension("exr").display());
-            output_path.with_extension("exr")
-        }
-        Err(e) => {
-            // EXR not supported, save as 16-bit TIFF fallback
-            println!("    [OPENCV-MERGE] EXR not supported ({}), saving as TIFF", e);
-            let tiff_params: Vector<i32> = vec![
-                opencv::imgcodecs::IMWRITE_TIFF_COMPRESSION as i32,
-                1,  // No compression
-            ].into_iter().collect();
-            
-            imwrite(&output_path.to_string_lossy(), &hdr, &tiff_params)
-                .map_err(|e| format!("Failed to save HDR TIFF: {}", e))?;
-            println!("    [OPENCV-MERGE] Saved HDR TIFF to {}", output_path.display());
-            output_path.to_path_buf()
-        }
-    };
+    println!("    [OPENCV-MERGE] Saved HDR EXR to {}", output_path.display());
 
     // Create log entry
     let log_file = logs_dir.join(format!("opencv_merge_set_{:03}.log", set_idx));
@@ -127,9 +105,9 @@ pub fn merge_with_debevec(
     for (file, exp_time) in source_files.iter().zip(exposure_times.iter()) {
         log_content.push_str(&format!("  {} (exposure: {}s)\n", file.display(), exp_time));
     }
-    log_content.push_str(&format!("\nOutput file: {}\n", saved_path.display()));
+    log_content.push_str(&format!("\nOutput file: {}\n", output_path.display()));
     log_content.push_str(&format!("\nProcessing time: {:.2}s\n", merge_start.elapsed().as_secs_f32()));
-    log_content.push_str("\n✓ HDR merge completed using OpenCV MergeDebevec algorithm.\n");
+    log_content.push_str("\n✓ HDR merge completed using OpenCV MergeDebevec + exr crate.\n");
 
     if let Err(e) = std::fs::write(&log_file, &log_content) {
         eprintln!("Warning: Failed to write log file: {}", e);
@@ -138,7 +116,62 @@ pub fn merge_with_debevec(
     println!("    [OPENCV-MERGE] Set {}: ✓ Complete (Time: {:.2}s)",
         set_idx, merge_start.elapsed().as_secs_f32());
 
-    Ok(saved_path)
+    Ok(output_path.to_path_buf())
+}
+
+/// Save HDR image from OpenCV Mat to EXR file using exr crate
+fn save_hdr_to_exr(hdr: &Mat, output_path: &Path) -> Result<(), String> {
+    // Get image dimensions
+    let size = hdr.size()
+        .map_err(|e| format!("Failed to get image size: {}", e))?;
+    let width = size.width as usize;
+    let height = size.height as usize;
+    let channels = hdr.channels();
+
+    if channels != 3 {
+        return Err(format!("Expected 3 channels, got {}", channels));
+    }
+
+    // Split channels to get individual R, G, B planes
+    let mut channels_vec: Vector<Mat> = Vector::new();
+    opencv::core::split(hdr, &mut channels_vec)
+        .map_err(|e| format!("Failed to split channels: {}", e))?;
+
+    if channels_vec.len() != 3 {
+        return Err(format!("Expected 3 channels after split, got {}", channels_vec.len()));
+    }
+
+    // Clone each channel Mat to extend lifetime
+    let r_mat = channels_vec.get(2).unwrap().clone();
+    let g_mat = channels_vec.get(1).unwrap().clone();
+    let b_mat = channels_vec.get(0).unwrap().clone();
+    
+    // Get data from each channel
+    let r_data = r_mat.data_typed::<f32>()
+        .map_err(|e| format!("Failed to get R channel data: {}", e))?;
+    let g_data = g_mat.data_typed::<f32>()
+        .map_err(|e| format!("Failed to get G channel data: {}", e))?;
+    let b_data = b_mat.data_typed::<f32>()
+        .map_err(|e| format!("Failed to get B channel data: {}", e))?;
+
+    // Create pixel buffer (OpenCV uses BGR, exr expects RGB)
+    let mut pixels = Vec::with_capacity(width * height);
+    for i in 0..(width * height) {
+        pixels.push((r_data[i], g_data[i], b_data[i]));
+    }
+
+    // Use exr crate's simple write function
+    exr::prelude::write_rgb_file(
+        &output_path.to_string_lossy().to_string(),
+        width,
+        height,
+        |x, y| {
+            let idx = y * width + x;
+            pixels[idx]
+        }
+    ).map_err(|e| format!("Failed to write EXR file: {}", e))?;
+
+    Ok(())
 }
 
 /// Merge bracketed sets using OpenCV MergeDebevec with parallel processing
@@ -231,6 +264,24 @@ pub fn merge_with_opencv_debevec_concurrent(
     Ok(())
 }
 
+/// Extract exposure times from scanned files
+///
+/// # Arguments
+/// * `files` - Slice of ScannedFile with exposure_time data
+///
+/// # Returns
+/// Vector of exposure times in seconds
+pub fn extract_exposure_times(files: &[crate::scan_folder::ScannedFile]) -> Vec<f32> {
+    files.iter()
+        .map(|f| {
+            f.exposure_time
+                .as_ref()
+                .and_then(|s| parse_exposure_time(s))
+                .unwrap_or(0.01)  // Default to 1/100s if not available
+        })
+        .collect()
+}
+
 /// Parse exposure time string to f32 (in seconds)
 fn parse_exposure_time(exp_str: &str) -> Option<f32> {
     let exp_str = exp_str.trim();
@@ -253,22 +304,4 @@ fn parse_exposure_time(exp_str: &str) -> Option<f32> {
     }
 
     None
-}
-
-/// Extract exposure times from scanned files
-///
-/// # Arguments
-/// * `files` - Slice of ScannedFile with exposure_time data
-///
-/// # Returns
-/// Vector of exposure times in seconds
-pub fn extract_exposure_times(files: &[crate::scan_folder::ScannedFile]) -> Vec<f32> {
-    files.iter()
-        .map(|f| {
-            f.exposure_time
-                .as_ref()
-                .and_then(|s| parse_exposure_time(s))
-                .unwrap_or(0.01)  // Default to 1/100s if not available
-        })
-        .collect()
 }

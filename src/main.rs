@@ -43,7 +43,7 @@ fn run_cli_mode(cli: cli::Cli) -> Result<(), Box<dyn std::error::Error>> {
     config.gui_settings.threads = cli.threads as u8;
     config.gui_settings.do_cleanup = cli.cleanup;
     config.gui_settings.do_align = cli.align;
-    config.gui_settings.use_opencv = cli.use_opencv;
+    config.gui_settings.use_opencv_align = cli.use_opencv_align;
     config.gui_settings.use_opencv_merge = cli.use_opencv_merge;
     config.gui_settings.use_opencv_tonemap = cli.use_opencv_tonemap;
     config.gui_settings.tonemap_operator = cli.tonemap_operator;
