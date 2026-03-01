@@ -1,6 +1,6 @@
 //! Setup dialog for configuring application settings
 
-use crate::config::{Config, Profile};
+use crate::config::{Config};
 use eframe::egui;
 
 pub struct SetupDialog {
