@@ -10,6 +10,8 @@
 //!
 //! All steps log output to Merged/logs/
 
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -81,10 +83,18 @@ pub fn process_folder(
 
     // Step 2: If alignment enabled, align each bracket set with align_image_stack to Merged/aligned/
     let aligned_files = if gui_settings.do_align {
-        println!("[STEP 2] Aligning {} bracket sets with align_image_stack...", folder.sets);
+        println!("[STEP 2] Aligning {} bracket sets with align_image_stack ({} threads)...", folder.sets, gui_settings.threads);
         let step_start = Instant::now();
         let align_folder = merged_dir.join("aligned");
-        let result = align_images_by_set(&source_files, &align_folder, gui_settings.use_opencv, &config.exe_paths.align_image_stack_exe, folder, &logs_dir)?;
+        let result = align_images_by_set_concurrent(
+            &source_files, 
+            &align_folder, 
+            gui_settings.use_opencv, 
+            &config.exe_paths.align_image_stack_exe, 
+            folder, 
+            &logs_dir,
+            gui_settings.threads as usize
+        )?;
         println!("[STEP 2] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
         result
     } else {
@@ -113,17 +123,20 @@ pub fn process_folder(
     // This ensures we have accurate exposure information even after alignment
     // which creates new files without EXIF data
     let ev_source_files = folder.files.clone();
-    
-    println!("[STEP 3] Merging {} bracket sets with Blender...", folder.sets);
+
+    println!("[STEP 3] Merging {} bracket sets with Blender ({} threads)...", folder.sets, gui_settings.threads);
     let step_start = Instant::now();
-    merge_with_blender(&aligned_files, &exr_folder, &source_files_for_merge, &ev_source_files, folder, &config.exe_paths.blender_exe, &logs_dir, folder.sets)?;
+    merge_with_blender_concurrent(&aligned_files, &exr_folder, &source_files_for_merge, &ev_source_files, folder, &config.exe_paths.blender_exe, &logs_dir, folder.sets, gui_settings.threads as usize)?;
     println!("[STEP 3] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
+
+    // Wait a moment for all file handles to be released and files to be fully written
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Step 4: Tone map EXR to JPG using Luminance CLI
     let jpg_folder = merged_dir.join("jpg");
     println!("[STEP 4] Tone mapping EXR files to JPG with Luminance CLI...");
     let step_start = Instant::now();
-    tone_map_exr_to_jpg(&exr_folder, &jpg_folder, &config.exe_paths.luminance_cli_exe, &logs_dir)?;
+    tone_map_exr_to_jpg_concurrent(&exr_folder, &jpg_folder, &config.exe_paths.luminance_cli_exe, &logs_dir, gui_settings.threads as usize)?;
     println!("[STEP 4] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
 
     // Step 5: Cleanup temporary files if enabled
@@ -844,6 +857,394 @@ fn tone_map_exr_to_jpg(
             ));
         }
         
+        println!("  [TONEMAP] File {}: ✓ Complete", filename);
+        println!("  [TONEMAP] File {}: Time: {:.2}s", filename, file_start.elapsed().as_secs_f32());
+    }
+
+    Ok(())
+}
+
+/// Align images by bracket set using parallel processing
+///
+/// # Arguments
+/// * `source_files` - List of all source files to align
+/// * `align_folder` - Output directory for aligned files (Merged/aligned/)
+/// * `use_opencv` - Whether to use OpenCV AlignMTB instead of align_image_stack
+/// * `align_exe` - Path to align_image_stack executable (used if use_opencv is false)
+/// * `folder` - Folder entry with bracket/set information
+/// * `logs_dir` - Directory to save log files
+/// * `threads` - Number of concurrent threads to use
+///
+/// # Returns
+/// List of aligned file paths (all sets combined, in order)
+fn align_images_by_set_concurrent(
+    source_files: &[PathBuf],
+    align_folder: &Path,
+    use_opencv: bool,
+    align_exe: &str,
+    folder: &FolderEntry,
+    logs_dir: &Path,
+    threads: usize,
+) -> Result<Vec<PathBuf>, String> {
+    if source_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Create align output directory
+    if let Err(e) = std::fs::create_dir_all(align_folder) {
+        return Err(format!("Failed to create align directory: {}", e));
+    }
+
+    // Check if align_image_stack is configured (only needed if not using OpenCV)
+    if !use_opencv && align_exe.is_empty() {
+        return Err("align_image_stack not configured in setup".to_string());
+    }
+
+    // Group files by bracket sets
+    let bracket_count = folder.brackets as usize;
+    if bracket_count == 0 {
+        return Err("No brackets detected".to_string());
+    }
+
+    // Create a vector of set indices to process
+    let set_indices: Vec<usize> = (0..folder.sets as usize).collect();
+
+    // Process sets in parallel with limited concurrency
+    use rayon::prelude::*;
+    let results: Vec<Result<Vec<PathBuf>, String>> = set_indices
+        .par_iter()
+        .with_max_len(threads)
+        .map(|&set_idx| {
+            let set_start = Instant::now();
+            let start_idx = set_idx * bracket_count;
+            let end_idx = std::cmp::min(start_idx + bracket_count, source_files.len());
+            let set_files: Vec<PathBuf> = source_files[start_idx..end_idx].to_vec();
+
+            if set_files.len() != bracket_count {
+                return Ok(Vec::new());
+            }
+
+            if use_opencv {
+                println!("  [ALIGN] Set {}/{}: Aligning {} files with OpenCV AlignMTB...", set_idx + 1, folder.sets, set_files.len());
+                let aligned = crate::process::opencv_align::align_set_with_opencv(
+                    &set_files,
+                    align_folder,
+                    set_idx,
+                    logs_dir,
+                )?;
+                println!("  [ALIGN] Set {}/{}: Time: {:.2}s", set_idx + 1, folder.sets, set_start.elapsed().as_secs_f32());
+                Ok(aligned)
+            } else {
+                println!("  [ALIGN] Set {}/{}: Aligning {} files with align_image_stack...", set_idx + 1, folder.sets, set_files.len());
+                let aligned = align_single_set(
+                    &set_files,
+                    align_folder,
+                    set_idx,
+                    align_exe,
+                    logs_dir,
+                )?;
+                println!("  [ALIGN] Set {}/{}: Time: {:.2}s", set_idx + 1, folder.sets, set_start.elapsed().as_secs_f32());
+                Ok(aligned)
+            }
+        })
+        .collect();
+
+    // Collect results
+    let mut all_aligned_files = Vec::new();
+    for result in results {
+        match result {
+            Ok(files) => all_aligned_files.extend(files),
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Sort by filename to maintain order
+    all_aligned_files.sort();
+
+    Ok(all_aligned_files)
+}
+
+/// Merge bracketed sets using Blender HDR_Merge.blend with parallel processing
+fn merge_with_blender_concurrent(
+    files: &[PathBuf],
+    exr_folder: &Path,
+    _source_files: &[crate::scan_folder::ScannedFile],
+    ev_source_files: &[crate::scan_folder::ScannedFile],
+    folder: &FolderEntry,
+    blender_exe: &str,
+    logs_dir: &Path,
+    total_sets: u32,
+    threads: usize,
+) -> Result<(), String> {
+    if files.is_empty() {
+        return Err("No files to merge".to_string());
+    }
+
+    // Check if Blender is configured
+    if blender_exe.is_empty() {
+        return Err("Blender executable not configured in setup".to_string());
+    }
+
+    // Create EXR output directory
+    if let Err(e) = std::fs::create_dir_all(exr_folder) {
+        return Err(format!("Failed to create exr directory: {}", e));
+    }
+
+    // Get the blend file and python script paths
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let blender_folder = exe_dir.join("blender");
+    let blend_file = blender_folder.join("HDR_Merge.blend");
+    let merge_py = blender_folder.join("blender_merge.py");
+
+    let blend_file = if blend_file.exists() {
+        blend_file
+    } else {
+        let alt_blend = Path::new("blender").join("HDR_Merge.blend");
+        if alt_blend.exists() {
+            alt_blend
+        } else {
+            return Err("HDR_Merge.blend not found".to_string());
+        }
+    };
+
+    let merge_py = if merge_py.exists() {
+        merge_py
+    } else {
+        let alt_py = Path::new("blender").join("blender_merge.py");
+        if alt_py.exists() {
+            alt_py
+        } else {
+            return Err("blender_merge.py not found".to_string());
+        }
+    };
+
+    // Get resolution from the first file
+    let resolution = if !files.is_empty() {
+        let temp_file = crate::scan_folder::ScannedFile {
+            path: files[0].to_string_lossy().to_string(),
+            exposure_time: None,
+            f_number: None,
+            iso: None,
+        };
+        get_resolution_from_file(&temp_file)
+    } else {
+        get_resolution_from_file(&ev_source_files[0])
+    };
+    println!("    [BLENDER] Image resolution: {}", resolution);
+
+    // Get filter information from folder profile
+    let filter_used = get_filter_from_profile(folder);
+
+    // Group files by bracket sets
+    let bracket_count = folder.brackets as usize;
+    if bracket_count == 0 {
+        return Err("No brackets detected".to_string());
+    }
+
+    // Create set indices
+    let set_indices: Vec<usize> = (0..folder.sets as usize).collect();
+
+    // Process sets in parallel with limited concurrency
+    use rayon::prelude::*;
+    let results: Vec<Result<(), String>> = set_indices
+        .par_iter()
+        .with_max_len(threads)
+        .map(|&set_idx| {
+            let set_start = Instant::now();
+            let start_idx = set_idx * bracket_count;
+            let end_idx = std::cmp::min(start_idx + bracket_count, files.len());
+            let set_files: Vec<PathBuf> = files[start_idx..end_idx].to_vec();
+
+            if set_files.len() != bracket_count {
+                return Ok(());
+            }
+
+            println!("[BLENDER] Set {}/{}: Merging {} files to HDR...", set_idx + 1, total_sets, set_files.len());
+
+            // Generate output filename
+            let exr_filename = format!("merged_{:03}.exr", set_idx);
+            let exr_path = exr_folder.join(&exr_filename);
+
+            // Get the corresponding source files for this set (with EXIF data for EV calculation)
+            let ev_start = set_idx * bracket_count;
+            let ev_end = std::cmp::min(ev_start + bracket_count, ev_source_files.len());
+            let set_ev_files: Vec<crate::scan_folder::ScannedFile> = ev_source_files[ev_start..ev_end].to_vec();
+
+            // Calculate relative EV values
+            let ev_values = crate::process::ev_calc::calculate_relative_evs(&set_ev_files);
+
+            println!("    [BLENDER] EV values (brightest=0.0): {:?}", ev_values);
+            println!("    [BLENDER] File order (will be sorted by Python):");
+            for (i, (file, ev)) in set_files.iter().zip(ev_values.iter()).enumerate() {
+                let shutter = set_ev_files.get(i).and_then(|f| f.exposure_time.as_ref()).map(|s| s.as_str()).unwrap_or("N/A");
+                println!("      {}: {} (shutter: {}, EV: {:.3})", i, file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), shutter, ev);
+            }
+
+            // Build file list with exposure values
+            let mut file_args = Vec::new();
+            for (file, ev) in set_files.iter().zip(ev_values.iter()) {
+                file_args.push(format!("{}___{:.3}", file.display(), ev));
+            }
+
+            // Build Blender command
+            let mut cmd = Command::new(blender_exe);
+            cmd.arg("--background")
+                .arg(&blend_file)
+                .arg("--factory-startup")
+                .arg("--python")
+                .arg(&merge_py)
+                .arg("--")
+                .arg(&resolution)
+                .arg(exr_path.to_str().ok_or("Invalid EXR output path")?)
+                .arg(&filter_used)
+                .arg(set_idx.to_string());
+
+            for file_arg in &file_args {
+                cmd.arg(file_arg);
+            }
+
+            // Execute Blender
+            let output = cmd.output()
+                .map_err(|e| format!("Failed to execute Blender: {}", e))?;
+
+            // Save logs
+            let log_file = logs_dir.join(format!("blender_merge_set_{:03}.log", set_idx));
+            let mut log_content = String::new();
+            log_content.push_str(&format!("=== Blender HDR Merge - Set {} ===\n\n", set_idx));
+            log_content.push_str(&format!("Command: {:?}\n\n", cmd));
+            log_content.push_str("STDOUT:\n");
+            log_content.push_str(&String::from_utf8_lossy(&output.stdout));
+            log_content.push_str("\nSTDERR:\n");
+            log_content.push_str(&String::from_utf8_lossy(&output.stderr));
+
+            if let Err(e) = std::fs::write(&log_file, &log_content) {
+                eprintln!("Warning: Failed to write log file: {}", e);
+            }
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                println!("  [BLENDER] Set {}/{}: ✗ Failed!", set_idx + 1, total_sets);
+                return Err(format!(
+                    "Blender merge failed for set {}: {}\n{}",
+                    set_idx, stderr, stdout
+                ));
+            }
+
+            println!("  [BLENDER] Set {}/{}: ✓ Complete (output: {})", set_idx + 1, total_sets, exr_path.display());
+            println!("  [BLENDER] Set {}/{}: Time: {:.2}s", set_idx + 1, total_sets, set_start.elapsed().as_secs_f32());
+
+            Ok(())
+        })
+        .collect();
+
+    // Check for errors
+    for result in results {
+        match result {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
+}
+
+/// Tone map EXR files to JPG with parallel processing
+/// Note: Luminance HDR CLI has internal threading issues, so we process sequentially
+fn tone_map_exr_to_jpg_concurrent(
+    exr_folder: &Path,
+    jpg_folder: &Path,
+    luminance_exe: &str,
+    logs_dir: &Path,
+    _threads: usize,  // Not used due to Luminance CLI limitations
+) -> Result<(), String> {
+    if luminance_exe.is_empty() {
+        return Err("Luminance CLI not configured in setup".to_string());
+    }
+
+    // Create JPG output directory
+    if let Err(e) = std::fs::create_dir_all(jpg_folder) {
+        return Err(format!("Failed to create jpg directory: {}", e));
+    }
+
+    // Get list of EXR files
+    let mut exr_files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(exr_folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if ext.to_string_lossy().to_lowercase() == "exr" {
+                        exr_files.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    if exr_files.is_empty() {
+        return Err("No EXR files found for tone mapping".to_string());
+    }
+
+    // Sort by filename
+    exr_files.sort();
+
+    // Process files sequentially (Luminance HDR CLI has internal threading conflicts)
+    for (idx, exr_path) in exr_files.iter().enumerate() {
+        let file_start = Instant::now();
+        let filename = exr_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        println!("[TONEMAP] File {}/{}: {}", idx + 1, exr_files.len(), filename);
+
+        // Generate output JPG path
+        let jpg_path = jpg_folder.join(format!("{}.jpg", exr_path.file_stem().unwrap().to_string_lossy()));
+
+        // Build Luminance CLI command
+        // luminance-hdr-cli -l exr_path --tmo reinhard02 -q 98 -o jpg_path
+        let mut cmd = Command::new(luminance_exe);
+        cmd.arg("-l")  // Input file
+            .arg(exr_path)
+            .arg("--tmo")
+            .arg("reinhard02")  // Tone mapping operator
+            .arg("-q")
+            .arg("98")  // Quality
+            .arg("-o")
+            .arg(&jpg_path);
+
+        // Execute command
+        let output = cmd.output()
+            .map_err(|e| format!("Failed to execute Luminance CLI: {}", e))?;
+
+        // Save logs
+        let log_file = logs_dir.join(format!("tonemap_{}.log", exr_path.file_stem().unwrap().to_string_lossy()));
+        let mut log_content = String::new();
+        log_content.push_str(&format!("=== Luminance Tone Mapping ===\n\n"));
+        log_content.push_str(&format!("File: {}\n", exr_path.display()));
+        log_content.push_str(&format!("Command: {:?}\n\n", cmd));
+        log_content.push_str("STDOUT:\n");
+        log_content.push_str(&String::from_utf8_lossy(&output.stdout));
+        log_content.push_str("\nSTDERR:\n");
+        log_content.push_str(&String::from_utf8_lossy(&output.stderr));
+
+        if let Err(e) = std::fs::write(&log_file, &log_content) {
+            eprintln!("Warning: Failed to write log file: {}", e);
+        }
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            println!("  [TONEMAP] File {}: ✗ Failed", filename);
+            return Err(format!(
+                "Tone mapping failed for {}: {}\n",
+                exr_path.display(), stderr
+            ));
+        }
+
         println!("  [TONEMAP] File {}: ✓ Complete", filename);
         println!("  [TONEMAP] File {}: Time: {:.2}s", filename, file_start.elapsed().as_secs_f32());
     }

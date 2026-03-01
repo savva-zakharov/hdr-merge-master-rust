@@ -16,3 +16,5 @@ chrono = "0.4"
 image = "0.25"
 # OpenCV with photo module for AlignMTB
 opencv = { version = "0.97.2", features = ["photo"] }
+# Parallel processing
+rayon = "1.11"

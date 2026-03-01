@@ -1718,6 +1718,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "opencv",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",
