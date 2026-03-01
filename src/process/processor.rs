@@ -109,15 +109,10 @@ pub fn process_folder(
         }).collect()
     };
     
-    // For EV calculation, we always use the original RAW file data (folder.files)
-    // This ensures we have accurate exposure information even after processing
-    let ev_source_files = if folder.is_raw {
-        // Use original RAW files for EV calculation
-        folder.files.clone()
-    } else {
-        // For non-RAW, use the source files (they have EXIF)
-        source_files_for_merge.clone()
-    };
+    // For EV calculation, we always use the original scanned files (folder.files)
+    // This ensures we have accurate exposure information even after alignment
+    // which creates new files without EXIF data
+    let ev_source_files = folder.files.clone();
     
     println!("[STEP 3] Merging {} bracket sets with Blender...", folder.sets);
     let step_start = Instant::now();

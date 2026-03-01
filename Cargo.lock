@@ -1717,7 +1717,7 @@ dependencies = [
  "eframe",
  "image",
  "kamadak-exif",
- "libstacker",
+ "opencv",
  "rfd",
  "serde",
  "serde_json",
@@ -2082,17 +2082,6 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.3",
-]
-
-[[package]]
-name = "libstacker"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0490e441c5ce20494c622cbc16641facec2600257fe30146b4b73ac531c9b06"
-dependencies = [
- "opencv",
- "rayon",
- "thiserror 2.0.18",
 ]
 
 [[package]]
