@@ -18,3 +18,7 @@ image = "0.25"
 opencv = { version = "0.97.2", features = ["photo"] }
 # Parallel processing
 rayon = "1.11"
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+# Directory paths
+dirs = "5.0"

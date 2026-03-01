@@ -10,7 +10,6 @@
 //!
 //! All steps log output to Merged/logs/
 
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -124,20 +123,45 @@ pub fn process_folder(
     // which creates new files without EXIF data
     let ev_source_files = folder.files.clone();
 
-    println!("[STEP 3] Merging {} bracket sets with Blender ({} threads)...", folder.sets, gui_settings.threads);
+    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec or Blender
+    if gui_settings.use_opencv_merge {
+        println!("[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...", folder.sets, gui_settings.threads);
+    } else {
+        println!("[STEP 3] Merging {} bracket sets with Blender ({} threads)...", folder.sets, gui_settings.threads);
+    }
     let step_start = Instant::now();
-    merge_with_blender_concurrent(&aligned_files, &exr_folder, &source_files_for_merge, &ev_source_files, folder, &config.exe_paths.blender_exe, &logs_dir, folder.sets, gui_settings.threads as usize)?;
+    
+    if gui_settings.use_opencv_merge {
+        crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(&aligned_files, &exr_folder, &ev_source_files, folder, &logs_dir, folder.sets, gui_settings.threads as usize)?;
+    } else {
+        crate::process::external_blender::merge_with_blender_concurrent(&aligned_files, &exr_folder, &source_files_for_merge, &ev_source_files, folder, &config.exe_paths.blender_exe, &logs_dir, folder.sets, gui_settings.threads as usize)?;
+    }
     println!("[STEP 3] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
 
     // Wait a moment for all file handles to be released and files to be fully written
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Step 4: Tone map EXR to JPG using Luminance CLI
+    // Step 4: Tone map HDR to JPG using either OpenCV or Luminance CLI
     let jpg_folder = merged_dir.join("jpg");
-    println!("[STEP 4] Tone mapping EXR files to JPG with Luminance CLI ({} threads)...", gui_settings.threads);
-    let step_start = Instant::now();
-    tone_map_exr_to_jpg_concurrent(&exr_folder, &jpg_folder, &config.exe_paths.luminance_cli_exe, &logs_dir, gui_settings.threads as usize)?;
-    println!("[STEP 4] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
+    
+    // Determine which files to tone map (EXR for Blender, TIFF for OpenCV merge)
+    let hdr_folder = if gui_settings.use_opencv_merge {
+        exr_folder.clone()  // TIFF files from OpenCV merge
+    } else {
+        exr_folder.clone()  // EXR files from Blender
+    };
+    
+    if gui_settings.use_opencv_tonemap {
+        println!("[STEP 4] Tone mapping HDR to JPG with OpenCV ({} threads)...", gui_settings.threads);
+        let step_start = Instant::now();
+        tone_map_with_opencv(&hdr_folder, &jpg_folder, gui_settings, &logs_dir, gui_settings.threads as usize)?;
+        println!("[STEP 4] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
+    } else {
+        println!("[STEP 4] Tone mapping EXR files to JPG with Luminance CLI ({} threads)...", gui_settings.threads);
+        let step_start = Instant::now();
+        crate::process::external_luminance::tone_map_exr_to_jpg_concurrent(&exr_folder, &jpg_folder, &config.exe_paths.luminance_cli_exe, &logs_dir, gui_settings.threads as usize)?;
+        println!("[STEP 4] Completed in {:.2}s", step_start.elapsed().as_secs_f32());
+    }
 
     // Step 5: Cleanup temporary files if enabled
     if gui_settings.do_cleanup {
@@ -256,89 +280,6 @@ fn process_raw_files(
     Ok(tif_files)
 }
 
-/// Align images by bracket set using either align_image_stack or OpenCV AlignMTB
-///
-/// Each bracket set is aligned separately to avoid mixing exposures across sets.
-///
-/// # Arguments
-/// * `source_files` - List of all source files to align
-/// * `align_folder` - Output directory for aligned files (Merged/aligned/)
-/// * `use_opencv` - Whether to use OpenCV AlignMTB instead of align_image_stack
-/// * `align_exe` - Path to align_image_stack executable (used if use_opencv is false)
-/// * `folder` - Folder entry with bracket/set information
-/// * `logs_dir` - Directory to save log files
-///
-/// # Returns
-/// List of aligned file paths (all sets combined, in order)
-fn align_images_by_set(
-    source_files: &[PathBuf],
-    align_folder: &Path,
-    use_opencv: bool,
-    align_exe: &str,
-    folder: &FolderEntry,
-    logs_dir: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    if source_files.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Create align output directory
-    if let Err(e) = std::fs::create_dir_all(align_folder) {
-        return Err(format!("Failed to create align directory: {}", e));
-    }
-
-    // Check if align_image_stack is configured (only needed if not using OpenCV)
-    if !use_opencv && align_exe.is_empty() {
-        return Err("align_image_stack not configured in setup".to_string());
-    }
-
-    // Group files by bracket sets
-    let bracket_count = folder.brackets as usize;
-    if bracket_count == 0 {
-        return Err("No brackets detected".to_string());
-    }
-
-    let mut all_aligned_files = Vec::new();
-
-    // Process each set separately
-    for set_idx in 0..folder.sets as usize {
-        let set_start = Instant::now();
-        let start_idx = set_idx * bracket_count;
-        let end_idx = std::cmp::min(start_idx + bracket_count, source_files.len());
-        let set_files = &source_files[start_idx..end_idx];
-
-        if set_files.len() != bracket_count {
-            continue;
-        }
-
-        if use_opencv {
-            println!("  [ALIGN] Set {}/{}: Aligning {} files with OpenCV AlignMTB...", set_idx + 1, folder.sets, set_files.len());
-            // Use OpenCV AlignMTB
-            let aligned = crate::process::opencv_align::align_set_with_opencv(
-                set_files,
-                align_folder,
-                set_idx,
-                logs_dir,
-            )?;
-            all_aligned_files.extend(aligned);
-        } else {
-            println!("  [ALIGN] Set {}/{}: Aligning {} files with align_image_stack...", set_idx + 1, folder.sets, set_files.len());
-            // Use align_image_stack
-            let aligned = align_single_set(
-                set_files,
-                align_folder,
-                set_idx,
-                align_exe,
-                logs_dir,
-            )?;
-            all_aligned_files.extend(aligned);
-        }
-        
-        println!("  [ALIGN] Set {}/{}: Time: {:.2}s", set_idx + 1, folder.sets, set_start.elapsed().as_secs_f32());
-    }
-
-    Ok(all_aligned_files)
-}
 
 /// Align a single bracket set using align_image_stack
 ///
@@ -964,6 +905,96 @@ fn align_images_by_set_concurrent(
     Ok(all_aligned_files)
 }
 
+/// Merge bracketed sets using OpenCV MergeDebevec with parallel processing
+fn merge_with_opencv_debevec(
+    files: &[PathBuf],
+    exr_folder: &Path,
+    ev_source_files: &[crate::scan_folder::ScannedFile],
+    folder: &FolderEntry,
+    logs_dir: &Path,
+    total_sets: u32,
+    threads: usize,
+) -> Result<(), String> {
+    if files.is_empty() {
+        return Err("No files to merge".to_string());
+    }
+
+    // Create EXR output directory
+    if let Err(e) = std::fs::create_dir_all(exr_folder) {
+        return Err(format!("Failed to create exr directory: {}", e));
+    }
+
+    // Group files by bracket sets
+    let bracket_count = folder.brackets as usize;
+    if bracket_count == 0 {
+        return Err("No brackets detected".to_string());
+    }
+
+    // Create set indices
+    let set_indices: Vec<usize> = (0..folder.sets as usize).collect();
+
+    // Process sets in parallel with limited concurrency
+    use rayon::prelude::*;
+    let results: Vec<Result<(), String>> = set_indices
+        .par_iter()
+        .with_max_len(threads)
+        .map(|&set_idx| {
+            let set_start = Instant::now();
+            let start_idx = set_idx * bracket_count;
+            let end_idx = std::cmp::min(start_idx + bracket_count, files.len());
+            let set_files: Vec<PathBuf> = files[start_idx..end_idx].to_vec();
+
+            if set_files.len() != bracket_count {
+                return Ok(());
+            }
+
+            println!("[OPENCV-MERGE] Set {}/{}: Merging {} files to HDR...", set_idx + 1, total_sets, set_files.len());
+
+            // Generate output filename (EXR for OpenCV merge, matching Blender output)
+            let out_filename = format!("merged_{:03}.exr", set_idx);
+            let exr_path = exr_folder.join(&out_filename);
+
+            // Get the corresponding source files for this set (with EXIF data for exposure times)
+            let ev_start = set_idx * bracket_count;
+            let ev_end = std::cmp::min(ev_start + bracket_count, ev_source_files.len());
+            let set_ev_files: Vec<crate::scan_folder::ScannedFile> = ev_source_files[ev_start..ev_end].to_vec();
+
+            // Extract exposure times
+            let exposure_times = crate::process::opencv_merge::extract_exposure_times(&set_ev_files);
+
+            println!("    [OPENCV-MERGE] Exposure times: {:?}", exposure_times);
+            println!("    [OPENCV-MERGE] File order:");
+            for (i, file) in set_files.iter().enumerate() {
+                println!("      {}: {} (exposure: {}s)", i, file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), exposure_times.get(i).unwrap_or(&0.01));
+            }
+
+            // Merge using OpenCV MergeDebevec
+            let result_path = crate::process::opencv_merge::merge_with_debevec(
+                &set_files,
+                &exposure_times,
+                &exr_path,
+                logs_dir,
+                set_idx,
+            )?;
+
+            println!("  [OPENCV-MERGE] Set {}/{}: ✓ Complete (output: {})", set_idx + 1, total_sets, result_path.display());
+            println!("  [OPENCV-MERGE] Set {}/{}: Time: {:.2}s", set_idx + 1, total_sets, set_start.elapsed().as_secs_f32());
+
+            Ok(())
+        })
+        .collect();
+
+    // Check for errors
+    for result in results {
+        match result {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
+}
+
 /// Merge bracketed sets using Blender HDR_Merge.blend with parallel processing
 fn merge_with_blender_concurrent(
     files: &[PathBuf],
@@ -1151,6 +1182,62 @@ fn merge_with_blender_concurrent(
     }
 
     Ok(())
+}
+
+/// Tone map HDR files to JPG using OpenCV
+fn tone_map_with_opencv(
+    hdr_folder: &Path,
+    jpg_folder: &Path,
+    gui_settings: &GuiSettings,
+    logs_dir: &Path,
+    threads: usize,
+) -> Result<(), String> {
+    // Get list of HDR files (both EXR and TIFF)
+    let mut hdr_files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(hdr_folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    if ext_lower == "exr" || ext_lower == "tif" || ext_lower == "tiff" {
+                        hdr_files.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    if hdr_files.is_empty() {
+        return Err("No HDR files found for tone mapping".to_string());
+    }
+
+    // Sort by filename
+    hdr_files.sort();
+
+    // Create tone mapping params from gui_settings
+    let operator = match gui_settings.tonemap_operator.to_lowercase().as_str() {
+        "drago" => crate::process::opencv_tonemap::ToneMappingOperator::Drago,
+        "mantiuk" => crate::process::opencv_tonemap::ToneMappingOperator::Mantiuk,
+        _ => crate::process::opencv_tonemap::ToneMappingOperator::Reinhard,
+    };
+
+    let params = crate::process::opencv_tonemap::ToneMappingParams {
+        operator,
+        intensity: gui_settings.tonemap_intensity,
+        contrast: gui_settings.tonemap_contrast,
+        saturation: gui_settings.tonemap_saturation,
+        detail: 0.0,
+    };
+
+    // Use OpenCV tone mapping
+    crate::process::opencv_tonemap::tone_map_hdr_to_jpg_opencv(
+        &hdr_files,
+        jpg_folder,
+        &params,
+        logs_dir,
+        threads,
+    )
 }
 
 /// Tone map EXR files to JPG with parallel processing

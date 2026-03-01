@@ -60,11 +60,35 @@ impl SetupDialog {
                                 ui.checkbox(&mut config.gui_settings.do_recursive, "Recursive Processing");
                                 ui.checkbox(&mut config.gui_settings.do_cleanup, "Cleanup Temporary Files");
                                 ui.checkbox(&mut config.gui_settings.do_align, "Do Align");
-                                ui.checkbox(&mut config.gui_settings.use_opencv, "Use OpenCV");
+                                ui.checkbox(&mut config.gui_settings.use_opencv, "Use OpenCV (AlignMTB)");
+                                ui.checkbox(&mut config.gui_settings.use_opencv_merge, "Use OpenCV Merge (Debevec)");
+                                ui.checkbox(&mut config.gui_settings.use_opencv_tonemap, "Use OpenCV Tone Mapping");
 
                                 ui.horizontal(|ui| {
                                     ui.label("Recursive Max Depth:");
                                     ui.add(egui::DragValue::new(&mut config.gui_settings.recursive_max_depth).range(0..=10));
+                                });
+
+                                ui.separator();
+                                ui.label("Tone Mapping Operator:");
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut config.gui_settings.tonemap_operator, "Reinhard".to_string(), "Reinhard");
+                                    ui.radio_value(&mut config.gui_settings.tonemap_operator, "Drago".to_string(), "Drago");
+                                    ui.radio_value(&mut config.gui_settings.tonemap_operator, "Durand".to_string(), "Durand");
+                                    ui.radio_value(&mut config.gui_settings.tonemap_operator, "Mantiuk".to_string(), "Mantiuk");
+                                });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Intensity:");
+                                    ui.add(egui::DragValue::new(&mut config.gui_settings.tonemap_intensity).range(0.0..=1.0).speed(0.1));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Contrast:");
+                                    ui.add(egui::DragValue::new(&mut config.gui_settings.tonemap_contrast).range(0.0..=1.0).speed(0.1));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Saturation:");
+                                    ui.add(egui::DragValue::new(&mut config.gui_settings.tonemap_saturation).range(0.0..=1.0).speed(0.1));
                                 });
 
                                 ui.separator();

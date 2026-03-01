@@ -73,6 +73,12 @@ impl HdrMergeApp {
             do_cleanup: config.gui_settings.do_cleanup,
             do_align: config.gui_settings.do_align,
             use_opencv: config.gui_settings.use_opencv,
+            use_opencv_merge: config.gui_settings.use_opencv_merge,
+            use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
+            tonemap_operator: config.gui_settings.tonemap_operator.clone(),
+            tonemap_intensity: config.gui_settings.tonemap_intensity,
+            tonemap_contrast: config.gui_settings.tonemap_contrast,
+            tonemap_saturation: config.gui_settings.tonemap_saturation,
         };
 
         // Initialize profiles from config or use defaults

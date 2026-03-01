@@ -1,9 +1,27 @@
 //! Configuration structures for the application
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::scan_folder::ScannedFile;
+
+/// Get the configuration file path
+pub fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let config_dir = if cfg!(target_os = "windows") {
+        // Windows: %APPDATA%\hdr-merge-master\
+        dirs::config_dir()
+            .ok_or("Could not find config directory")?
+            .join("hdr-merge-master")
+    } else {
+        // Linux/Mac: ~/.config/hdr-merge-master/
+        dirs::config_dir()
+            .ok_or("Could not find config directory")?
+            .join("hdr-merge-master")
+    };
+
+    std::fs::create_dir_all(&config_dir)?;
+    Ok(config_dir.join("config.json"))
+}
 
 // ========== Configuration File Structures ==========
 
@@ -30,6 +48,18 @@ impl Config {
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            _needs_setup: true,
+            _optional_exes_available: OptionalExesAvailable::default(),
+            exe_paths: ExePaths::default(),
+            gui_settings: GuiSettingsConfig::default(),
+            pp3_profiles: Vec::new(),
+        }
     }
 }
 
@@ -97,6 +127,34 @@ pub struct GuiSettingsConfig {
     pub threads: u8,
     #[serde(default)]
     pub use_opencv: bool,
+    #[serde(default)]
+    pub use_opencv_merge: bool,  // Use OpenCV MergeDebevec instead of Blender
+    #[serde(default)]
+    pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping instead of Luminance CLI
+    #[serde(default = "default_tonemap_operator")]
+    pub tonemap_operator: String,  // Reinhard, Drago, Durand, Mantiuk
+    #[serde(default = "default_tonemap_intensity")]
+    pub tonemap_intensity: f32,
+    #[serde(default = "default_tonemap_contrast")]
+    pub tonemap_contrast: f32,
+    #[serde(default = "default_tonemap_saturation")]
+    pub tonemap_saturation: f32,
+}
+
+fn default_tonemap_operator() -> String {
+    "Reinhard".to_string()
+}
+
+fn default_tonemap_intensity() -> f32 {
+    1.0
+}
+
+fn default_tonemap_contrast() -> f32 {
+    1.0
+}
+
+fn default_tonemap_saturation() -> f32 {
+    1.0
 }
 
 fn default_recursive_max_depth() -> u32 {
@@ -141,6 +199,12 @@ impl Default for GuiSettingsConfig {
             recursive_max_depth: 1,
             threads: 6,
             use_opencv: false,
+            use_opencv_merge: false,
+            use_opencv_tonemap: false,
+            tonemap_operator: "Reinhard".to_string(),
+            tonemap_intensity: 1.0,
+            tonemap_contrast: 1.0,
+            tonemap_saturation: 1.0,
         }
     }
 }
@@ -179,6 +243,12 @@ pub struct GuiSettings {
     pub do_cleanup: bool,
     pub do_align: bool,
     pub use_opencv: bool,
+    pub use_opencv_merge: bool,
+    pub use_opencv_tonemap: bool,
+    pub tonemap_operator: String,
+    pub tonemap_intensity: f32,
+    pub tonemap_contrast: f32,
+    pub tonemap_saturation: f32,
 }
 
 impl Default for GuiSettings {
@@ -189,6 +259,30 @@ impl Default for GuiSettings {
             do_cleanup: false,
             do_align: false,
             use_opencv: false,
+            use_opencv_merge: false,
+            use_opencv_tonemap: false,
+            tonemap_operator: "Reinhard".to_string(),
+            tonemap_intensity: 1.0,
+            tonemap_contrast: 1.0,
+            tonemap_saturation: 1.0,
+        }
+    }
+}
+
+impl From<&GuiSettingsConfig> for GuiSettings {
+    fn from(config: &GuiSettingsConfig) -> Self {
+        GuiSettings {
+            threads: config.threads as u32,
+            do_recursive: config.do_recursive,
+            do_cleanup: config.do_cleanup,
+            do_align: config.do_align,
+            use_opencv: config.use_opencv,
+            use_opencv_merge: config.use_opencv_merge,
+            use_opencv_tonemap: config.use_opencv_tonemap,
+            tonemap_operator: config.tonemap_operator.clone(),
+            tonemap_intensity: config.tonemap_intensity,
+            tonemap_contrast: config.tonemap_contrast,
+            tonemap_saturation: config.tonemap_saturation,
         }
     }
 }
