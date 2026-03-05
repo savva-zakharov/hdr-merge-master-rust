@@ -5,7 +5,7 @@
 //! Processing Flow:
 //! 1. If RAW files: process with RawTherapee CLI → Merged/tif/
 //! 2. If align enabled: align with align_image_stack → Merged/aligned/ (or OpenCV AlignMTB if enabled)
-//! 3. Merge each bracketed set using Blender HDR_Merge.blend → Merged/exr/ (or OpenCV MergeDebevec if enabled)
+//! 3. Merge each bracketed set using Blender HDR_Merge.blend → Merged/exr/ (or OpenCV MergeDebevec/Robertson if enabled)
 //! 4. Tone map EXR to JPG using Luminance CLI → Merged/jpg/ (or OpenCV tonemapping if enabled)
 //!
 //! All steps log output to Merged/logs/
@@ -151,10 +151,15 @@ pub fn process_folder(
     // which creates new files without EXIF data
     let ev_source_files = folder.files.clone();
 
-    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec or Blender
+    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec/Robertson or Blender
     if gui_settings.use_opencv_merge {
         println!(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...",
+            folder.sets, gui_settings.threads
+        );
+    } else if gui_settings.use_opencv_merge_robertson {
+        println!(
+            "[STEP 3] Merging {} bracket sets with OpenCV MergeRobertson ({} threads)...",
             folder.sets, gui_settings.threads
         );
     } else {
@@ -167,6 +172,16 @@ pub fn process_folder(
 
     if gui_settings.use_opencv_merge {
         crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &ev_source_files,
+            folder,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+        )?;
+    } else if gui_settings.use_opencv_merge_robertson {
+        crate::process::opencv_merge::merge_with_opencv_robertson_concurrent(
             &aligned_files,
             &exr_folder,
             &ev_source_files,

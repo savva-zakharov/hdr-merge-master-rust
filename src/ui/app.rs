@@ -1,13 +1,21 @@
 //! Main application UI and state management
 
-use eframe::egui;
+use iced::widget::{
+    button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, text_input, Column, Row, Space,
+};
+use iced::{keyboard, Alignment, Element, Length, Subscription, Task};
 use std::path::Path;
 
-use crate::config::{Config, GuiSettings, GuiSettingsConfig, OptionalExesAvailable, ExePaths, Profile, FolderEntry};
-use crate::scan_folder::ScannedFile;
-use crate::ui::{SetupDialog, ProfileManagerDialog, EditProfileDialog, ClearProfilesConfirmDialog};
-use crate::ui::{ProfileAction, EditProfileAction, ClearProfilesAction, DialogAction};
+use crate::config::{
+    Config, ExePaths, FolderEntry, GuiSettings, GuiSettingsConfig, OptionalExesAvailable, Profile,
+};
 use crate::process;
+use crate::scan_folder::ScannedFile;
+use crate::ui::{ClearProfilesConfirmDialog, EditProfileDialog, ProfileManagerDialog, SetupDialog};
+use crate::ui::clear_profiles_confirm_dialog::ClearProfilesMessage;
+use crate::ui::edit_profile_dialog::EditProfileMessage;
+use crate::ui::profile_manager_dialog::ProfileMessage;
+use crate::ui::setup_dialog::DialogMessage;
 
 pub struct HdrMergeApp {
     batch_folders: Vec<FolderEntry>,
@@ -17,10 +25,52 @@ pub struct HdrMergeApp {
     progress: f32,
     status_message: String,
     config: Config,
+    uiscale: f32,
     setup_dialog: SetupDialog,
     profile_manager_dialog: ProfileManagerDialog,
     edit_profile_dialog: EditProfileDialog,
     clear_profiles_confirm_dialog: ClearProfilesConfirmDialog,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    // Main app actions
+    AddFolder,
+    RemoveSelected,
+    ClearAll,
+    ExportBatch,
+    ImportBatch,
+    Execute,
+    SelectFolder(usize),
+    SelectProfile(String),
+    ToggleRecursive(bool),
+    ToggleAlign(bool),
+    ToggleCleanup(bool),
+    ThreadsChanged(String),
+
+    // Setup dialog
+    OpenSetup,
+    SetupDialogMsg(DialogMessage),
+
+    // Profile manager
+    OpenProfileManager,
+    ProfileManagerMsg(ProfileMessage),
+
+    // Edit profile
+    EditProfileMsg(EditProfileMessage),
+
+    // Clear profiles
+    ClearProfilesMsg(ClearProfilesMessage),
+
+    // File dialog results
+    FolderSelected(Option<String>),
+    BatchExportSelected(Option<String>),
+    BatchImportSelected(Option<String>),
+    ProfileFileSelected(Option<String>),
+
+    // UI scaling
+    FontSizeIncreased,
+    FontSizeDecreased,
 }
 
 impl Default for HdrMergeApp {
@@ -44,6 +94,7 @@ impl Default for HdrMergeApp {
                 gui_settings: GuiSettingsConfig::default(),
                 pp3_profiles: Vec::new(),
             },
+            uiscale: 1.0,
             setup_dialog: SetupDialog::new(),
             profile_manager_dialog: ProfileManagerDialog::new(),
             edit_profile_dialog: EditProfileDialog::new(),
@@ -53,10 +104,7 @@ impl Default for HdrMergeApp {
 }
 
 impl HdrMergeApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Set light theme
-        cc.egui_ctx.set_visuals(egui::Visuals::light());
-
+    pub fn new() -> (Self, Task<Message>) {
         // Load configuration
         let config = Config::load("config.json").unwrap_or_else(|_| Config {
             _needs_setup: false,
@@ -74,6 +122,7 @@ impl HdrMergeApp {
             do_align: config.gui_settings.do_align,
             use_opencv_align: config.gui_settings.use_opencv_align,
             use_opencv_merge: config.gui_settings.use_opencv_merge,
+            use_opencv_merge_robertson: config.gui_settings.use_opencv_merge_robertson,
             use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
             tonemap_operator: config.gui_settings.tonemap_operator.clone(),
             tonemap_intensity: config.gui_settings.tonemap_intensity,
@@ -93,12 +142,15 @@ impl HdrMergeApp {
             config.pp3_profiles.iter().map(|p| p.name.clone()).collect()
         };
 
-        Self {
-            config,
+        let app = Self {
+            config: config.clone(),
             gui_settings,
             profiles,
+            uiscale: config.gui_settings.uiscale,
             ..Default::default()
-        }
+        };
+
+        (app, Task::none())
     }
 
     fn format_exif_info(file: &ScannedFile) -> String {
@@ -121,76 +173,56 @@ impl HdrMergeApp {
         }
     }
 
-    fn open_setup(&mut self) {
-        self.setup_dialog.open(&self.config);
+    fn add_folder(&mut self) -> Task<Message> {
+        Task::perform(
+            async {
+                let file_dialog = rfd::AsyncFileDialog::new();
+                file_dialog.pick_folder().await
+            },
+            |folder| {
+                folder.map(|f| f.path().to_string_lossy().to_string())
+            },
+        ).map(Message::FolderSelected)
     }
 
-    fn handle_setup_action(&mut self, action: DialogAction) {
-        match action {
-            DialogAction::Save => {
-                if let Some(config) = self.setup_dialog.save() {
-                    if let Err(e) = config.save("config.json") {
-                        self.status_message = format!("Failed to save config: {}", e);
-                    } else {
-                        self.status_message = "Configuration saved".to_string();
-
-                        // Update main app state with new config
-                        self.gui_settings.threads = config.gui_settings.threads as u32;
-                        self.gui_settings.do_recursive = config.gui_settings.do_recursive;
-                        self.gui_settings.do_cleanup = config.gui_settings.do_cleanup;
-                        self.gui_settings.do_align = config.gui_settings.do_align;
-                        self.gui_settings.use_opencv_align = config.gui_settings.use_opencv_align;
-
-                        // Update profiles from config
-                        self.profiles = if config.pp3_profiles.is_empty() {
-                            vec![
-                                "Default".to_string(),
-                                "Landscape".to_string(),
-                                "Portrait".to_string(),
-                                "Night".to_string(),
-                            ]
-                        } else {
-                            config.pp3_profiles.iter().map(|p| p.name.clone()).collect()
-                        };
-
-                        self.config = config;
-                    }
-                }
-            }
-            DialogAction::Cancel => {
-                self.setup_dialog.cancel();
-            }
-            DialogAction::None => {}
-        }
-    }
-
-
-    fn add_folder(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            let path_str = path.to_string_lossy().to_string();
-
+    fn handle_folder_selected(&mut self, path_opt: Option<String>) {
+        if let Some(path_str) = path_opt {
             // Check if already in batch
             if self.batch_folders.iter().any(|f| f.path == path_str) {
                 return;
             }
 
+            let path = Path::new(&path_str);
+            
             // Use the scan_folder module to scan the folder
             let scan_result = crate::scan_folder::scan_folder(
-                &path,
+                path,
                 &self.config.gui_settings.processed_extensions,
                 &self.config.gui_settings.raw_extensions,
             );
 
             // Determine the primary extension from scanned files
-            let extension = scan_result.files
+            let extension = scan_result
+                .files
                 .first()
                 .and_then(|f| Path::new(&f.path).extension())
                 .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
-                .unwrap_or_else(|| self.config.gui_settings.processed_extensions.first().cloned().unwrap_or_else(|| ".tiff".to_string()));
+                .unwrap_or_else(|| {
+                    self.config
+                        .gui_settings
+                        .processed_extensions
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| ".tiff".to_string())
+                });
 
             self.batch_folders.push(FolderEntry {
                 path: path_str,
-                profile: self.profiles.first().cloned().unwrap_or_else(|| "Default".to_string()),
+                profile: self
+                    .profiles
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Default".to_string()),
                 extension,
                 is_raw: scan_result.is_raw,
                 align: self.gui_settings.do_align,
@@ -201,135 +233,25 @@ impl HdrMergeApp {
         }
     }
 
-    fn open_profile_manager(&mut self) {
-        self.profile_manager_dialog.open();
+    fn export_batch(&mut self) -> Task<Message> {
+        Task::perform(
+            async {
+                let file_dialog = rfd::AsyncFileDialog::new()
+                    .set_file_name("batch_export.json");
+                file_dialog.save_file().await
+            },
+            |file| {
+                file.map(|f| f.path().to_string_lossy().to_string())
+            },
+        ).map(Message::BatchExportSelected)
     }
 
-    fn handle_profile_action(&mut self, action: ProfileAction) {
-        match action {
-            ProfileAction::Add => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PP3 File", &["pp3"])
-                    .pick_file()
-                {
-                    let path_str = path.to_string_lossy().to_string();
-                    let name = path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("New Profile")
-                        .to_string();
-
-                    let profile = Profile {
-                        name: name.clone(),
-                        file_path: path_str.clone(),
-                        tag: String::new(),
-                    };
-
-                    self.config.pp3_profiles.push(profile);
-                    self.profiles.push(name);
-                    let _ = self.config.save("config.json");
-                }
-            }
-            ProfileAction::Delete(index) => {
-                if index < self.config.pp3_profiles.len() {
-                    self.config.pp3_profiles.remove(index);
-                }
-                if index < self.profiles.len() {
-                    self.profiles.remove(index);
-                }
-                let _ = self.config.save("config.json");
-            }
-            ProfileAction::Edit(index) => {
-                let profile = self.config.pp3_profiles.get(index);
-                let (name, path, tag) = if let Some(p) = profile {
-                    (p.name.clone(), p.file_path.clone(), p.tag.clone())
-                } else {
-                    (self.profiles.get(index).cloned().unwrap_or_default(), String::new(), String::new())
-                };
-                self.edit_profile_dialog.open(index, &name, &path, &tag);
-            }
-            ProfileAction::ClearAll => {
-                self.clear_profiles_confirm_dialog.open();
-            }
-            ProfileAction::Close => {
-                self.profile_manager_dialog.close();
-            }
-            ProfileAction::None => {}
-        }
-    }
-
-    fn handle_edit_profile_action(&mut self, action: EditProfileAction) {
-        match action {
-            EditProfileAction::Save => {
-                let (index, name, path, tag) = self.edit_profile_dialog.get_result();
-                if let Some(idx) = index {
-                    if idx < self.config.pp3_profiles.len() {
-                        self.config.pp3_profiles[idx].name = name.clone();
-                        self.config.pp3_profiles[idx].file_path = path.clone();
-                        self.config.pp3_profiles[idx].tag = tag;
-                    }
-                    if idx < self.profiles.len() {
-                        self.profiles[idx] = name;
-                    }
-                    let _ = self.config.save("config.json");
-                }
-                self.edit_profile_dialog.close();
-            }
-            EditProfileAction::Cancel => {
-                self.edit_profile_dialog.close();
-            }
-            EditProfileAction::None => {}
-        }
-    }
-
-    fn handle_clear_profiles_action(&mut self, action: ClearProfilesAction) {
-        match action {
-            ClearProfilesAction::Confirm => {
-                self.config.pp3_profiles.clear();
-                self.profiles = vec![
-                    "Default".to_string(),
-                    "Landscape".to_string(),
-                    "Portrait".to_string(),
-                    "Night".to_string(),
-                ];
-                let _ = self.config.save("config.json");
-                self.clear_profiles_confirm_dialog.close();
-            }
-            ClearProfilesAction::Cancel => {
-                self.clear_profiles_confirm_dialog.close();
-            }
-            ClearProfilesAction::None => {}
-        }
-    }
-
-
-    fn remove_selected(&mut self) {
-        if let Some(index) = self.selected_index {
-            if index < self.batch_folders.len() {
-                self.batch_folders.remove(index);
-                self.selected_index = None;
-            }
-        }
-    }
-
-    fn clear_all(&mut self) {
-        self.batch_folders.clear();
-        self.selected_index = None;
-    }
-
-    fn export_batch(&mut self) {
-        if self.batch_folders.is_empty() {
-            self.status_message = "No folders to export".to_string();
-            return;
-        }
-
-        if let Some(path) = rfd::FileDialog::new()
-            .set_file_name("batch_export.json")
-            .save_file()
-        {
+    fn handle_batch_export(&mut self, path_opt: Option<String>) {
+        if let Some(path_str) = path_opt {
             let json = serde_json::to_string_pretty(&self.batch_folders);
             match json {
                 Ok(content) => {
-                    if let Err(e) = std::fs::write(path, content) {
+                    if let Err(e) = std::fs::write(&path_str, content) {
                         self.status_message = format!("Export failed: {}", e);
                     } else {
                         self.status_message = "Export successful".to_string();
@@ -340,21 +262,29 @@ impl HdrMergeApp {
         }
     }
 
-    fn import_batch(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("JSON", &["json"])
-            .pick_file()
-        {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    match serde_json::from_str::<Vec<FolderEntry>>(&content) {
-                        Ok(folders) => {
-                            self.batch_folders.extend(folders);
-                            self.status_message = "Import successful".to_string();
-                        }
-                        Err(e) => self.status_message = format!("Parse failed: {}", e),
+    fn import_batch(&mut self) -> Task<Message> {
+        Task::perform(
+            async {
+                let file_dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("JSON", &["json"]);
+                file_dialog.pick_file().await
+            },
+            |file| {
+                file.map(|f| f.path().to_string_lossy().to_string())
+            },
+        ).map(Message::BatchImportSelected)
+    }
+
+    fn handle_batch_import(&mut self, path_opt: Option<String>) {
+        if let Some(path_str) = path_opt {
+            match std::fs::read_to_string(&path_str) {
+                Ok(content) => match serde_json::from_str::<Vec<FolderEntry>>(&content) {
+                    Ok(folders) => {
+                        self.batch_folders.extend(folders);
+                        self.status_message = "Import successful".to_string();
                     }
-                }
+                    Err(e) => self.status_message = format!("Parse failed: {}", e),
+                },
                 Err(e) => self.status_message = format!("Read failed: {}", e),
             }
         }
@@ -398,195 +328,507 @@ impl HdrMergeApp {
             );
         }
     }
-}
 
-impl eframe::App for HdrMergeApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Handle setup dialog
-        let setup_action = self.setup_dialog.render(ctx);
-        self.handle_setup_action(setup_action);
-
-        // Handle profile manager dialog
-        let profile_action = self.profile_manager_dialog.render(ctx, &self.profiles, &self.config.pp3_profiles);
-        self.handle_profile_action(profile_action);
-
-        // Handle edit profile dialog
-        let edit_action = self.edit_profile_dialog.render(ctx);
-        self.handle_edit_profile_action(edit_action);
-
-        // Handle clear profiles confirmation dialog
-        let clear_action = self.clear_profiles_confirm_dialog.render(ctx);
-        self.handle_clear_profiles_action(clear_action);
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-
-                // ========== Batch Folders Section ==========
-                ui.horizontal(|ui| {
-                    ui.label("Input Folders:");
-
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            // Folder table
-                            egui::ScrollArea::vertical()
-                                .max_height(800.0)
-                                .max_width(800.0)
-                                .show(ui, |ui| {
-                                    egui::Grid::new("folder_grid")
-                                        .num_columns(7)
-                                        .spacing([10.0, 4.0])
-                                        .striped(true)
-                                        .show(ui, |ui| {
-                                            ui.label("Folder");
-                                            ui.label("Profile");
-                                            ui.label("Ext");
-                                            ui.label("RAW");
-                                            ui.label("Align");
-                                            ui.label("Brackets");
-                                            ui.label("Sets");
-                                            ui.end_row();
-
-                                            for (i, folder) in self.batch_folders.iter().enumerate() {
-                                                let is_selected = self.selected_index == Some(i);
-                                                if is_selected {
-                                                    ui.scope(|ui| {
-                                                        ui.visuals_mut().selection.bg_fill = egui::Color32::from_rgb(200, 200, 255);
-                                                        let _ = ui.selectable_label(true, &folder.path);
-                                                    });
-                                                } else {
-                                                    if ui.selectable_label(is_selected, &folder.path).clicked() {
-                                                        self.selected_index = Some(i);
-                                                    }
-                                                }
-                                                ui.label(&folder.profile);
-                                                ui.label(&folder.extension);
-                                                ui.label(if folder.is_raw { "Yes" } else { "No" });
-                                                ui.label(if folder.align { "Yes" } else { "No" });
-                                                ui.label(folder.brackets.to_string());
-                                                ui.label(format!("{} files", folder.files.len()));
-                                                ui.end_row();
-                                            }
-                                        });
-                                });
-
-                            // Buttons
-                            ui.vertical(|ui| {
-                                if ui.button("Add").clicked() {
-                                    self.add_folder();
-                                }
-                                if ui.button("Remove").clicked() {
-                                    self.remove_selected();
-                                }
-                                if ui.button("Clear All").clicked() {
-                                    self.clear_all();
-                                }
-                                ui.separator();
-                                if ui.button("Export").clicked() {
-                                    self.export_batch();
-                                }
-                                if ui.button("Import").clicked() {
-                                    self.import_batch();
-                                }
-                                ui.checkbox(&mut self.gui_settings.do_recursive, "Recursive");
-                            });
-                        });
-                    });
-                });
-
-                // Show files for selected folder
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::AddFolder => {
+                return self.add_folder();
+            }
+            Message::FolderSelected(path) => {
+                self.handle_folder_selected(path);
+            }
+            Message::RemoveSelected => {
                 if let Some(index) = self.selected_index {
-                    if let Some(folder) = self.batch_folders.get(index) {
-                        ui.separator();
-                        ui.label(format!("Files in: {} ({} files, {} brackets, {} sets)",
-                            folder.path, folder.files.len(), folder.brackets, folder.sets));
-
-                        egui::ScrollArea::vertical()
-                            .max_height(150.0)
-                            .show(ui, |ui| {
-                                egui::Grid::new("files_grid")
-                                    .num_columns(2)
-                                    .spacing([10.0, 4.0])
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        ui.label("File Path");
-                                        ui.label("EXIF Info");
-                                        ui.end_row();
-
-                                        for file in &folder.files {
-                                            ui.label(&file.path);
-                                            let exif_info = Self::format_exif_info(file);
-                                            ui.label(if exif_info.is_empty() { "No EXIF" } else { &exif_info });
-                                            ui.end_row();
-                                        }
-                                    });
-                            });
+                    if index < self.batch_folders.len() {
+                        self.batch_folders.remove(index);
+                        self.selected_index = None;
                     }
                 }
-
-                ui.separator();
-
-                // ========== Profile Selection Section ==========
-                ui.horizontal(|ui| {
-                    ui.label("PP3 Profile:");
-
-                    egui::ComboBox::from_label("")
-                        .selected_text(
-                            self.selected_index
-                                .and_then(|i| self.batch_folders.get(i))
-                                .map(|f| f.profile.clone())
-                                .unwrap_or_else(|| "Select...".to_string())
-                        )
-                        .show_ui(ui, |ui| {
-                            for profile in &self.profiles {
-                                ui.selectable_value(&mut self.selected_index, None, profile);
-                            }
-                        });
-
-                    ui.checkbox(&mut self.gui_settings.do_align,
-                        if self.gui_settings.use_opencv_align { "Align (OpenCV)" } else { "Align (Hugin)" }
-                    );
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Manage Profiles...").clicked() {
-                            self.open_profile_manager();
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                // ========== Options Section ==========
-                ui.horizontal(|ui| {
-                    ui.label("Threads:");
-                    ui.add(egui::DragValue::new(&mut self.gui_settings.threads)
-                        .range(1..=self.config.gui_settings.threads as u32 * 2));
-
-                    ui.checkbox(&mut self.gui_settings.do_cleanup, "Cleanup temporary files");
-                    ui.checkbox(&mut self.gui_settings.do_recursive, "Recursive");
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Create HDRs").clicked() {
-                            self.execute();
-                        }
-                        if ui.button("Setup").clicked() {
-                            self.open_setup();
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                // ========== Progress Bar Section ==========
-                ui.horizontal(|ui| {
-                    ui.add(egui::ProgressBar::new(self.progress).show_percentage());
-                });
-
-                // Status message
-                if !self.status_message.is_empty() {
-                    ui.label(&self.status_message);
+            }
+            Message::ClearAll => {
+                self.batch_folders.clear();
+                self.selected_index = None;
+            }
+            Message::ExportBatch => {
+                return self.export_batch();
+            }
+            Message::BatchExportSelected(path) => {
+                self.handle_batch_export(path);
+            }
+            Message::ImportBatch => {
+                return self.import_batch();
+            }
+            Message::BatchImportSelected(path) => {
+                self.handle_batch_import(path);
+            }
+            Message::Execute => {
+                self.execute();
+            }
+            Message::SelectFolder(index) => {
+                self.selected_index = Some(index);
+            }
+            Message::SelectProfile(profile) => {
+                if let Some(index) = self.selected_index {
+                    if let Some(folder) = self.batch_folders.get_mut(index) {
+                        folder.profile = profile;
+                    }
                 }
-            });
-        });
+            }
+            Message::ToggleRecursive(value) => {
+                self.gui_settings.do_recursive = value;
+            }
+            Message::ToggleAlign(value) => {
+                self.gui_settings.do_align = value;
+            }
+            Message::ToggleCleanup(value) => {
+                self.gui_settings.do_cleanup = value;
+            }
+            Message::ThreadsChanged(value) => {
+                self.gui_settings.threads = value.parse().unwrap_or(1);
+            }
+
+            // Setup dialog
+            Message::OpenSetup => {
+                self.setup_dialog.open(&self.config);
+            }
+            Message::SetupDialogMsg(msg) => {
+                if let DialogMessage::Save = msg {
+                    self.setup_dialog.save(&mut self.config);
+                    if let Err(e) = self.config.save("config.json") {
+                        self.status_message = format!("Failed to save config: {}", e);
+                    } else {
+                        self.status_message = "Configuration saved".to_string();
+
+                        // Update main app state with new config
+                        self.gui_settings.threads = self.config.gui_settings.threads as u32;
+                        self.gui_settings.do_recursive = self.config.gui_settings.do_recursive;
+                        self.gui_settings.do_cleanup = self.config.gui_settings.do_cleanup;
+                        self.gui_settings.do_align = self.config.gui_settings.do_align;
+                        self.gui_settings.use_opencv_align = self.config.gui_settings.use_opencv_align;
+                        self.gui_settings.use_opencv_merge = self.config.gui_settings.use_opencv_merge;
+                        self.gui_settings.use_opencv_merge_robertson = self.config.gui_settings.use_opencv_merge_robertson;
+
+                        // Update profiles from config
+                        self.profiles = if self.config.pp3_profiles.is_empty() {
+                            vec![
+                                "Default".to_string(),
+                                "Landscape".to_string(),
+                                "Portrait".to_string(),
+                                "Night".to_string(),
+                            ]
+                        } else {
+                            self.config.pp3_profiles.iter().map(|p| p.name.clone()).collect()
+                        };
+                    }
+                    self.setup_dialog.cancel();
+                } else if let DialogMessage::Cancel = msg {
+                    self.setup_dialog.cancel();
+                } else {
+                    self.setup_dialog.update(msg, &mut self.config);
+                }
+            }
+
+            // Profile manager
+            Message::OpenProfileManager => {
+                self.profile_manager_dialog.open();
+            }
+            Message::ProfileManagerMsg(msg) => {
+                match msg {
+                    ProfileMessage::Add => {
+                        return Task::perform(
+                            async {
+                                let file_dialog = rfd::AsyncFileDialog::new()
+                                    .add_filter("PP3 File", &["pp3"]);
+                                file_dialog.pick_file().await
+                            },
+                            |file| {
+                                file.map(|f| f.path().to_string_lossy().to_string())
+                            },
+                        ).map(Message::ProfileFileSelected);
+                    }
+                    ProfileMessage::Delete(index) => {
+                        if index < self.config.pp3_profiles.len() {
+                            self.config.pp3_profiles.remove(index);
+                        }
+                        if index < self.profiles.len() {
+                            self.profiles.remove(index);
+                        }
+                        let _ = self.config.save("config.json");
+                    }
+                    ProfileMessage::Edit(index) => {
+                        let profile = self.config.pp3_profiles.get(index);
+                        let (name, path, tag) = if let Some(p) = profile {
+                            (p.name.clone(), p.file_path.clone(), p.tag.clone())
+                        } else {
+                            (
+                                self.profiles.get(index).cloned().unwrap_or_default(),
+                                String::new(),
+                                String::new(),
+                            )
+                        };
+                        self.edit_profile_dialog.open(index, &name, &path, &tag);
+                    }
+                    ProfileMessage::ClearAll => {
+                        self.clear_profiles_confirm_dialog.open();
+                    }
+                    ProfileMessage::Close => {
+                        self.profile_manager_dialog.close();
+                    }
+                }
+            }
+            Message::ProfileFileSelected(path_opt) => {
+                if let Some(path_str) = path_opt {
+                    let name = Path::new(&path_str)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("New Profile")
+                        .to_string();
+
+                    let profile = Profile {
+                        name: name.clone(),
+                        file_path: path_str.clone(),
+                        tag: String::new(),
+                    };
+
+                    self.config.pp3_profiles.push(profile);
+                    self.profiles.push(name);
+                    let _ = self.config.save("config.json");
+                }
+            }
+
+            // Edit profile
+            Message::EditProfileMsg(msg) => {
+                if let EditProfileMessage::Save = msg {
+                    let (index, name, path, tag) = self.edit_profile_dialog.get_result();
+                    if let Some(idx) = index {
+                        if idx < self.config.pp3_profiles.len() {
+                            self.config.pp3_profiles[idx].name = name.clone();
+                            self.config.pp3_profiles[idx].file_path = path.clone();
+                            self.config.pp3_profiles[idx].tag = tag;
+                        }
+                        if idx < self.profiles.len() {
+                            self.profiles[idx] = name;
+                        }
+                        let _ = self.config.save("config.json");
+                    }
+                    self.edit_profile_dialog.close();
+                } else if let EditProfileMessage::Cancel = msg {
+                    self.edit_profile_dialog.close();
+                } else {
+                    self.edit_profile_dialog.update(msg);
+                }
+            }
+
+            // Clear profiles
+            Message::ClearProfilesMsg(msg) => {
+                match msg {
+                    ClearProfilesMessage::Confirm => {
+                        self.config.pp3_profiles.clear();
+                        self.profiles = vec![
+                            "Default".to_string(),
+                            "Landscape".to_string(),
+                            "Portrait".to_string(),
+                            "Night".to_string(),
+                        ];
+                        let _ = self.config.save("config.json");
+                        self.clear_profiles_confirm_dialog.close();
+                    }
+                    ClearProfilesMessage::Cancel => {
+                        self.clear_profiles_confirm_dialog.close();
+                    }
+                }
+            }
+
+            // UI scaling
+            Message::FontSizeIncreased => {
+                self.uiscale = (self.uiscale * 1.1).min(3.0); // Cap at 3x
+                self.config.gui_settings.uiscale = self.uiscale;
+                let _ = self.config.save("config.json");
+            }
+            Message::FontSizeDecreased => {
+                self.uiscale = (self.uiscale * 0.9).max(0.5); // Minimum 0.5x
+                self.config.gui_settings.uiscale = self.uiscale;
+                let _ = self.config.save("config.json");
+            }
+        }
+
+        Task::none()
     }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        let mut content = Column::new().spacing(8.0 * self.uiscale).padding(10.0 * self.uiscale);
+
+        // ========== Batch Folders Section ==========
+        let folders_label = text("Input Folders:").size(14.0 * self.uiscale);
+
+        let mut folder_rows = Column::new().spacing(4.0 * self.uiscale);
+
+        // Header row
+        let header = Row::new()
+            .push(text("Folder").width(Length::FillPortion(3)))
+            .push(text("Profile").width(Length::Fill))
+            .push(text("Ext").width(Length::Fill))
+            .push(text("RAW").width(Length::Fill))
+            .push(text("Align").width(Length::Fill))
+            .push(text("Brackets").width(Length::Fill))
+            .push(text("Sets").width(Length::Fill))
+            .spacing(10.0 * self.uiscale)
+            .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+        folder_rows = folder_rows.push(header);
+
+        // Folder rows
+        for (i, folder) in self.batch_folders.iter().enumerate() {
+            let is_selected = self.selected_index == Some(i);
+            let folder_row = Row::new()
+                .push(
+                    button(text(if is_selected {
+                        format!("● {}", &folder.path)
+                    } else {
+                        format!("○ {}", &folder.path)
+                    }))
+                    .on_press(Message::SelectFolder(i))
+                    .width(Length::FillPortion(3))
+                )
+                .push(text(&folder.profile).width(Length::Fill))
+                .push(text(&folder.extension).width(Length::Fill))
+                .push(text(if folder.is_raw { "Yes" } else { "No" }).width(Length::Fill))
+                .push(text(if folder.align { "Yes" } else { "No" }).width(Length::Fill))
+                .push(text(folder.brackets.to_string()).width(Length::Fill))
+                .push(text(format!("{} files", folder.files.len())).width(Length::Fill))
+                .spacing(10.0 * self.uiscale)
+                .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+            folder_rows = folder_rows.push(folder_row);
+        }
+
+        let folder_scroll = scrollable(folder_rows).height(Length::Fixed(200.0 * self.uiscale));
+
+        let buttons = Column::new()
+            .spacing(4.0 * self.uiscale)
+            .push(button(text("Add").size(12.0 * self.uiscale)).on_press(Message::AddFolder))
+            .push(button(text("Remove").size(12.0 * self.uiscale)).on_press(Message::RemoveSelected))
+            .push(button(text("Clear All").size(12.0 * self.uiscale)).on_press(Message::ClearAll))
+            .push(horizontal_rule((20.0 * self.uiscale) as u16))
+            .push(button(text("Export").size(12.0 * self.uiscale)).on_press(Message::ExportBatch))
+            .push(button(text("Import").size(12.0 * self.uiscale)).on_press(Message::ImportBatch))
+            .push(
+                checkbox(self.gui_settings.do_recursive)
+                    .label("Recursive")
+                    .on_toggle(Message::ToggleRecursive),
+            );
+
+        let folders_section = Row::new()
+            .push(folder_scroll)
+            .push(buttons)
+            .spacing(10.0 * self.uiscale)
+            .align_y(Alignment::Start);
+        content = content.push(Column::new().push(folders_label).push(folders_section).spacing(8.0 * self.uiscale));
+
+        // Show files for selected folder
+        if let Some(index) = self.selected_index {
+            if let Some(folder) = self.batch_folders.get(index) {
+                content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+                let files_label = text(format!(
+                    "Files in: {} ({} files, {} brackets, {} sets)",
+                    folder.path,
+                    folder.files.len(),
+                    folder.brackets,
+                    folder.sets
+                )).size(14.0 * self.uiscale);
+
+                let mut file_rows = Column::new().spacing(4.0 * self.uiscale);
+                let file_header = Row::new()
+                    .push(text("File Path").width(Length::Fill))
+                    .push(text("EXIF Info").width(Length::Fill))
+                    .spacing(10.0 * self.uiscale)
+                    .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+                file_rows = file_rows.push(file_header);
+
+                for file in &folder.files {
+                    let exif_info = Self::format_exif_info(file);
+                    let file_row = Row::new()
+                        .push(text(&file.path).width(Length::Fill))
+                        .push(text(if exif_info.is_empty() {
+                            "No EXIF".to_string()
+                        } else {
+                            exif_info
+                        }).width(Length::Fill))
+                        .spacing(10.0 * self.uiscale)
+                        .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+                    file_rows = file_rows.push(file_row);
+                }
+
+                let file_scroll = scrollable(file_rows).height(Length::Fixed(150.0 * self.uiscale));
+                content = content.push(Column::new().push(files_label).push(file_scroll).spacing(4.0 * self.uiscale));
+            }
+        }
+
+        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+
+        // ========== Profile Selection Section ==========
+        let profile_label = text("PP3 Profile:").size(14.0 * self.uiscale);
+
+        let selected_profile = self
+            .selected_index
+            .and_then(|i| self.batch_folders.get(i))
+            .map(|f| f.profile.clone())
+            .unwrap_or_else(|| "Select...".to_string());
+
+        let profile_picklist = pick_list(
+            &self.profiles[..],
+            Some(selected_profile),
+            Message::SelectProfile,
+        ).placeholder("Select...");
+
+        let align_text = if self.gui_settings.use_opencv_align {
+            "Align (OpenCV)"
+        } else {
+            "Align (Hugin)"
+        };
+        let align_checkbox = checkbox(self.gui_settings.do_align)
+            .label(align_text)
+            .on_toggle(Message::ToggleAlign);
+
+        let manage_profiles_btn = button(text("Manage Profiles...").size(12.0 * self.uiscale))
+            .on_press(Message::OpenProfileManager);
+
+        let profile_section = Row::new()
+            .push(profile_label)
+            .push(profile_picklist)
+            .push(align_checkbox)
+            .push(horizontal_space())
+            .push(manage_profiles_btn)
+            .spacing(10.0 * self.uiscale)
+            .align_y(Alignment::Center);
+        content = content.push(profile_section);
+
+        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+
+        // ========== Options Section ==========
+        let threads_label = text("Threads:").size(14.0 * self.uiscale);
+        let threads_input = text_input("Threads", &self.gui_settings.threads.to_string())
+            .on_input(Message::ThreadsChanged)
+            .width(Length::Fixed(60.0 * self.uiscale));
+
+        let cleanup_checkbox = checkbox(self.gui_settings.do_cleanup)
+            .label("Cleanup temporary files")
+            .on_toggle(Message::ToggleCleanup);
+
+        let create_hdrs_btn = button(text("Create HDRs").size(12.0 * self.uiscale)).on_press(Message::Execute);
+        let setup_btn = button(text("Setup").size(12.0 * self.uiscale)).on_press(Message::OpenSetup);
+
+        let options_section = Row::new()
+            .push(threads_label)
+            .push(threads_input)
+            .push(cleanup_checkbox)
+            .push(horizontal_space())
+            .push(create_hdrs_btn)
+            .push(setup_btn)
+            .spacing(10.0 * self.uiscale)
+            .align_y(Alignment::Center);
+        content = content.push(options_section);
+
+        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+
+        // ========== Progress Bar Section ==========
+        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(20.0 * self.uiscale);
+        let status_text = text(&self.status_message).size(12.0 * self.uiscale);
+        let progress_section = Row::new()
+            .push(progress_bar_widget)
+            .push(status_text)
+            .spacing(10.0 * self.uiscale)
+            .align_y(Alignment::Center);
+        content = content.push(progress_section);
+
+        // Build the main content
+        let main_content = container(content).width(Length::Fill).height(Length::Fill);
+
+        // Overlay dialogs if they are open
+        if self.setup_dialog.show {
+            return container(
+                Column::new()
+                    .push(main_content)
+                    .push(
+                        container(self.setup_dialog.view(&self.config).map(Message::SetupDialogMsg))
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+
+        if self.profile_manager_dialog.show {
+            return container(
+                Column::new()
+                    .push(main_content)
+                    .push(
+                        container(self.profile_manager_dialog.view(&self.profiles, &self.config.pp3_profiles, self.uiscale).map(Message::ProfileManagerMsg))
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+
+        if self.edit_profile_dialog.show {
+            return container(
+                Column::new()
+                    .push(main_content)
+                    .push(
+                        container(self.edit_profile_dialog.view(self.uiscale).map(Message::EditProfileMsg))
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+
+        if self.clear_profiles_confirm_dialog.show {
+            return container(
+                Column::new()
+                    .push(main_content)
+                    .push(
+                        container(self.clear_profiles_confirm_dialog.view(self.uiscale).map(Message::ClearProfilesMsg))
+                            .width(Length::Fill)
+                            .height(Length::Fill),
+                    )
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+        }
+
+        main_content.into()
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        keyboard::listen().filter_map(|event| {
+            let keyboard::Event::KeyPressed { key, repeat: false, .. } = event else {
+                return None;
+            };
+
+            match key {
+                keyboard::Key::Character(c) if c.as_str() == "=" || c.as_str() == "+" => {
+                    Some(Message::FontSizeIncreased)
+                }
+                keyboard::Key::Character(c) if c.as_str() == "-" => {
+                    Some(Message::FontSizeDecreased)
+                }
+                _ => None,
+            }
+        })
+    }
+}
+
+fn horizontal_space() -> Element<'static, Message> {
+    Space::new().into()
+}
+
+fn horizontal_rule(thickness: u16) -> Element<'static, Message> {
+    rule::horizontal(thickness as u32).into()
 }

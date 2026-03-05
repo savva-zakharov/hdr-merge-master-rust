@@ -1,6 +1,17 @@
 //! Edit profile dialog for editing individual profile details
 
-use eframe::egui;
+use iced::widget::{button, container, rule, text, text_input, Column, Row, Space};
+use iced::{Element, Length};
+
+#[derive(Debug, Clone)]
+pub enum EditProfileMessage {
+    NameChanged(String),
+    FilePathChanged(String),
+    TagChanged(String),
+    Browse,
+    Save,
+    Cancel,
+}
 
 pub struct EditProfileDialog {
     pub show: bool,
@@ -8,12 +19,6 @@ pub struct EditProfileDialog {
     pub name: String,
     pub file_path: String,
     pub tag: String,
-}
-
-pub enum EditProfileAction {
-    Save,
-    Cancel,
-    None,
 }
 
 impl EditProfileDialog {
@@ -49,56 +54,84 @@ impl EditProfileDialog {
         )
     }
 
-    pub fn render(&mut self, ctx: &egui::Context) -> EditProfileAction {
-        if !self.show {
-            return EditProfileAction::None;
+    pub fn update(&mut self, message: EditProfileMessage) {
+        match message {
+            EditProfileMessage::NameChanged(value) => {
+                self.name = value;
+            }
+            EditProfileMessage::FilePathChanged(value) => {
+                self.file_path = value;
+            }
+            EditProfileMessage::TagChanged(value) => {
+                self.tag = value;
+            }
+            EditProfileMessage::Browse | EditProfileMessage::Save | EditProfileMessage::Cancel => {}
         }
-
-        let mut action = EditProfileAction::None;
-
-        egui::Window::new("Edit Profile")
-            .collapsible(false)
-            .resizable(false)
-            .default_size([400.0, 250.0])
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(250.0));
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("File Path:");
-                        ui.add(egui::TextEdit::singleline(&mut self.file_path).desired_width(250.0));
-                        if ui.button("Browse...").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("PP3 File", &["pp3"])
-                                .pick_file()
-                            {
-                                self.file_path = path.to_string_lossy().to_string();
-                            }
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Tag:");
-                        ui.add(egui::TextEdit::singleline(&mut self.tag).desired_width(250.0));
-                    });
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Save").clicked() {
-                                action = EditProfileAction::Save;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                action = EditProfileAction::Cancel;
-                            }
-                        });
-                    });
-                });
-            });
-
-        action
     }
+
+    pub fn view(&self, uiscale: f32) -> Element<'_, EditProfileMessage> {
+        let mut content = Column::new().spacing(8.0 * uiscale).padding(10.0 * uiscale);
+
+        // Name
+        let name_row = Row::new()
+            .push(text("Name:").width(Length::Fixed(80.0 * uiscale)))
+            .push(
+                text_input("Name", &self.name)
+                    .on_input(EditProfileMessage::NameChanged)
+                    .width(Length::Fixed(250.0 * uiscale)),
+            )
+            .spacing(10.0 * uiscale);
+        content = content.push(name_row);
+
+        // File Path
+        let browse_btn = button(text("Browse...").size(12.0 * uiscale)).on_press(EditProfileMessage::Browse);
+        let path_row = Row::new()
+            .push(text("File Path:").width(Length::Fixed(80.0 * uiscale)))
+            .push(
+                text_input("Path", &self.file_path)
+                    .on_input(EditProfileMessage::FilePathChanged)
+                    .width(Length::Fixed(250.0 * uiscale)),
+            )
+            .push(browse_btn)
+            .spacing(10.0 * uiscale);
+        content = content.push(path_row);
+
+        // Tag
+        let tag_row = Row::new()
+            .push(text("Tag:").width(Length::Fixed(80.0 * uiscale)))
+            .push(
+                text_input("Tag", &self.tag)
+                    .on_input(EditProfileMessage::TagChanged)
+                    .width(Length::Fixed(250.0 * uiscale)),
+            )
+            .spacing(10.0 * uiscale);
+        content = content.push(tag_row);
+
+        content = content.push(horizontal_rule((20.0 * uiscale) as u16));
+
+        // Buttons
+        let save_btn = button(text("Save").size(12.0 * uiscale)).on_press(EditProfileMessage::Save);
+        let cancel_btn = button(text("Cancel").size(12.0 * uiscale)).on_press(EditProfileMessage::Cancel);
+
+        let buttons = Row::new()
+            .push(horizontal_space())
+            .push(cancel_btn)
+            .push(save_btn)
+            .spacing(10.0 * uiscale);
+
+        content = content.push(buttons);
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+fn horizontal_space() -> Element<'static, EditProfileMessage> {
+    Space::new().into()
+}
+
+fn horizontal_rule(thickness: u16) -> Element<'static, EditProfileMessage> {
+    rule::horizontal(thickness as u32).into()
 }

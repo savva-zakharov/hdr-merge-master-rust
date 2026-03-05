@@ -51,6 +51,10 @@ pub struct Cli {
     #[arg(long)]
     pub use_opencv_merge: bool,
 
+    /// Use OpenCV MergeRobertson instead of Blender
+    #[arg(long)]
+    pub use_opencv_merge_robertson: bool,
+
     /// Use OpenCV tone mapping instead of Luminance CLI
     #[arg(long)]
     pub use_opencv_tonemap: bool,

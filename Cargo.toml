@@ -5,14 +5,20 @@ description = "HDR Merge Master - Desktop Application"
 authors = ["Savva Zakahrov"]
 license = "GPLv3-or-later"
 edition = "2024"
+default-run = "hdr-merge-master"
 
 [dependencies]
-eframe = "0.31"
+# GUI framework
+iced = { version = "0.14.0", features = ["tokio"] }
+# File dialogs
+rfd = "0.15"
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rfd = "0.15"
+# EXIF reading
 kamadak-exif = "0.5"
 chrono = "0.4"
+# Image processing
 image = "0.25"
 # OpenCV with photo module for AlignMTB
 opencv = { version = "0.97.2", features = ["photo"] }
@@ -24,3 +30,5 @@ clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
 # EXR file format support (pure Rust)
 exr = "1.7"
+# Async runtime
+tokio = { version = "1", features = ["full"] }

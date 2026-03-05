@@ -6,8 +6,7 @@ mod process;
 mod scan_folder;
 mod ui;
 
-use eframe::egui;
-use ui::HdrMergeApp;
+use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
@@ -209,20 +208,10 @@ fn scan_folder_recursive(
 
 /// Run in GUI mode
 fn run_gui_mode() -> Result<(), Box<dyn std::error::Error>> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 600.0])
-            .with_min_inner_size([800.0, 600.0]),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "HDR Merge Master 1.0.0",
-        options,
-        Box::new(|cc| Ok(Box::new(HdrMergeApp::new(cc)))),
-    )?;
+    iced::application(ui::HdrMergeApp::new, ui::HdrMergeApp::update, ui::HdrMergeApp::view)
+        .subscription(ui::HdrMergeApp::subscription)
+        .window_size((1000.0, 600.0))
+        .run()?;
 
     Ok(())
 }
-
-use std::path::PathBuf;

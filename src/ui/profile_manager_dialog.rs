@@ -1,19 +1,21 @@
 //! Profile manager dialog for managing PP3 profiles
 
+use iced::widget::{button, container, rule, scrollable, text, Column, Row, Space};
+use iced::{Element, Length};
+
 use crate::config::Profile;
-use eframe::egui;
 
-pub struct ProfileManagerDialog {
-    pub show: bool,
-}
-
-pub enum ProfileAction {
+#[derive(Debug, Clone)]
+pub enum ProfileMessage {
     Add,
     Delete(usize),
     Edit(usize),
     ClearAll,
     Close,
-    None,
+}
+
+pub struct ProfileManagerDialog {
+    pub show: bool,
 }
 
 impl ProfileManagerDialog {
@@ -29,86 +31,76 @@ impl ProfileManagerDialog {
         self.show = false;
     }
 
-    pub fn render(&mut self, ctx: &egui::Context, profiles: &[String], config_profiles: &[Profile]) -> ProfileAction {
-        if !self.show {
-            return ProfileAction::None;
+    pub fn view<'a>(&self, profiles: &'a [String], config_profiles: &'a [Profile], uiscale: f32) -> Element<'a, ProfileMessage> {
+        let mut content = Column::new().spacing(8.0 * uiscale).padding(10.0 * uiscale);
+
+        // Profile list
+        content = content.push(text("Saved Profiles:").size(14.0 * uiscale));
+
+        let mut profile_rows = Column::new().spacing(4.0 * uiscale);
+
+        // Header row
+        let header = Row::new()
+            .push(text("Name").width(Length::FillPortion(2)))
+            .push(text("File Path").width(Length::FillPortion(3)))
+            .push(text("Tag").width(Length::Fill))
+            .push(text("Actions").width(Length::FillPortion(2)))
+            .spacing(10.0 * uiscale)
+            .padding([4.0 * uiscale, 10.0 * uiscale]);
+        profile_rows = profile_rows.push(header);
+
+        // Profile rows
+        for (i, name) in profiles.iter().enumerate() {
+            let profile = config_profiles.get(i);
+            let path = profile.map(|p| p.file_path.as_str()).unwrap_or("");
+            let tag = profile.map(|p| p.tag.as_str()).unwrap_or("");
+
+            let profile_row = Row::new()
+                .push(text(name).width(Length::FillPortion(2)))
+                .push(text(path).width(Length::FillPortion(3)))
+                .push(text(tag).width(Length::Fill))
+                .push(
+                    Row::new()
+                        .push(button(text("Edit").size(12.0 * uiscale)).on_press(ProfileMessage::Edit(i)))
+                        .push(button(text("Delete").size(12.0 * uiscale)).on_press(ProfileMessage::Delete(i)))
+                        .spacing(5.0 * uiscale)
+                        .width(Length::FillPortion(2)),
+                )
+                .spacing(10.0 * uiscale)
+                .padding([4.0 * uiscale, 10.0 * uiscale]);
+            profile_rows = profile_rows.push(profile_row);
         }
 
-        let mut action = ProfileAction::None;
+        let profile_scroll = scrollable(profile_rows).height(Length::Fixed(300.0 * uiscale));
+        content = content.push(profile_scroll);
 
-        egui::Window::new("Manage Profiles")
-            .collapsible(false)
-            .resizable(true)
-            .default_size([600.0, 400.0])
-            .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    // Profile list
-                    ui.label("Saved Profiles:");
+        content = content.push(horizontal_rule((20.0 * uiscale) as u16));
 
-                    egui::ScrollArea::vertical()
-                        .max_height(300.0)
-                        .show(ui, |ui| {
-                            egui::Grid::new("profiles_grid")
-                                .num_columns(4)
-                                .spacing([10.0, 4.0])
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    ui.label("Name");
-                                    ui.label("File Path");
-                                    ui.label("Tag");
-                                    ui.label("Actions");
-                                    ui.end_row();
+        // Buttons
+        let add_btn = button(text("Add").size(12.0 * uiscale)).on_press(ProfileMessage::Add);
+        let clear_all_btn = button(text("Clear All").size(12.0 * uiscale)).on_press(ProfileMessage::ClearAll);
+        let close_btn = button(text("Close").size(12.0 * uiscale)).on_press(ProfileMessage::Close);
 
-                                    let mut delete_idx = None;
-                                    let mut edit_idx = None;
+        let buttons = Row::new()
+            .push(add_btn)
+            .push(clear_all_btn)
+            .push(horizontal_space())
+            .push(close_btn)
+            .spacing(10.0 * uiscale);
 
-                                    for (i, name) in profiles.iter().enumerate() {
-                                        let profile = config_profiles.get(i);
-                                        let path = profile.map(|p| p.file_path.clone()).unwrap_or_default();
-                                        let tag = profile.map(|p| p.tag.clone()).unwrap_or_default();
+        content = content.push(buttons);
 
-                                        ui.label(name);
-                                        ui.label(&path);
-                                        ui.label(&tag);
-
-                                        ui.horizontal(|ui| {
-                                            if ui.button("Edit").clicked() {
-                                                edit_idx = Some(i);
-                                            }
-                                            if ui.button("Delete").clicked() {
-                                                delete_idx = Some(i);
-                                            }
-                                        });
-                                        ui.end_row();
-                                    }
-
-                                    if let Some(idx) = delete_idx {
-                                        action = ProfileAction::Delete(idx);
-                                    }
-                                    if let Some(idx) = edit_idx {
-                                        action = ProfileAction::Edit(idx);
-                                    }
-                                });
-                        });
-
-                    // Buttons
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("Add").clicked() {
-                            action = ProfileAction::Add;
-                        }
-                        if ui.button("Clear All").clicked() {
-                            action = ProfileAction::ClearAll;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close").clicked() {
-                                action = ProfileAction::Close;
-                            }
-                        });
-                    });
-                });
-            });
-
-        action
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
+}
+
+fn horizontal_space() -> Element<'static, ProfileMessage> {
+    Space::new().into()
+}
+
+fn horizontal_rule(thickness: u16) -> Element<'static, ProfileMessage> {
+    rule::horizontal(thickness as u32).into()
 }

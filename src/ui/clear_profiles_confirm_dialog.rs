@@ -1,15 +1,16 @@
 //! Confirmation dialog for clearing all profiles
 
-use eframe::egui;
+use iced::widget::{button, container, rule, text, Column, Row, Space};
+use iced::{Element, Length};
+
+#[derive(Debug, Clone)]
+pub enum ClearProfilesMessage {
+    Confirm,
+    Cancel,
+}
 
 pub struct ClearProfilesConfirmDialog {
     pub show: bool,
-}
-
-pub enum ClearProfilesAction {
-    Confirm,
-    Cancel,
-    None,
 }
 
 impl ClearProfilesConfirmDialog {
@@ -25,34 +26,37 @@ impl ClearProfilesConfirmDialog {
         self.show = false;
     }
 
-    pub fn render(&mut self, ctx: &egui::Context) -> ClearProfilesAction {
-        if !self.show {
-            return ClearProfilesAction::None;
-        }
+    pub fn view(&self, uiscale: f32) -> Element<'_, ClearProfilesMessage> {
+        let mut content = Column::new().spacing(8.0 * uiscale).padding(20.0 * uiscale);
 
-        let mut action = ClearProfilesAction::None;
+        content = content.push(text("Are you sure you want to delete all profiles?").size(14.0 * uiscale));
+        content = content.push(text("This action cannot be undone.").size(12.0 * uiscale));
 
-        egui::Window::new("Confirm Clear All")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.label("Are you sure you want to delete all profiles?");
-                ui.label("This action cannot be undone.");
+        content = content.push(horizontal_rule((20.0 * uiscale) as u16));
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Yes, Clear All").clicked() {
-                            action = ClearProfilesAction::Confirm;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            action = ClearProfilesAction::Cancel;
-                        }
-                    });
-                });
-            });
+        // Buttons
+        let confirm_btn = button(text("Yes, Clear All").size(12.0 * uiscale)).on_press(ClearProfilesMessage::Confirm);
+        let cancel_btn = button(text("Cancel").size(12.0 * uiscale)).on_press(ClearProfilesMessage::Cancel);
 
-        action
+        let buttons = Row::new()
+            .push(horizontal_space())
+            .push(cancel_btn)
+            .push(confirm_btn)
+            .spacing(10.0 * uiscale);
+
+        content = content.push(buttons);
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
+}
+
+fn horizontal_space() -> Element<'static, ClearProfilesMessage> {
+    Space::new().into()
+}
+
+fn horizontal_rule(thickness: u16) -> Element<'static, ClearProfilesMessage> {
+    rule::horizontal(thickness as u32).into()
 }

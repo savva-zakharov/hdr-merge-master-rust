@@ -130,6 +130,8 @@ pub struct GuiSettingsConfig {
     #[serde(default)]
     pub use_opencv_merge: bool,  // Use OpenCV MergeDebevec instead of Blender
     #[serde(default)]
+    pub use_opencv_merge_robertson: bool,  // Use OpenCV MergeRobertson instead of Blender (alternative to MergeDebevec)
+    #[serde(default)]
     pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping instead of Luminance CLI
     #[serde(default = "default_tonemap_operator")]
     pub tonemap_operator: String,  // Reinhard, Drago, Durand, Mantiuk
@@ -139,6 +141,8 @@ pub struct GuiSettingsConfig {
     pub tonemap_contrast: f32,
     #[serde(default = "default_tonemap_saturation")]
     pub tonemap_saturation: f32,
+    #[serde(default = "default_uiscale")]
+    pub uiscale: f32,
 }
 
 fn default_tonemap_operator() -> String {
@@ -163,6 +167,10 @@ fn default_recursive_max_depth() -> u32 {
 
 fn default_threads() -> u8 {
     6
+}
+
+fn default_uiscale() -> f32 {
+    1.0
 }
 
 impl Default for GuiSettingsConfig {
@@ -200,11 +208,13 @@ impl Default for GuiSettingsConfig {
             threads: 6,
             use_opencv_align: false,
             use_opencv_merge: false,
+            use_opencv_merge_robertson: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
             tonemap_contrast: 1.0,
             tonemap_saturation: 1.0,
+            uiscale: 1.0,
         }
     }
 }
@@ -244,6 +254,7 @@ pub struct GuiSettings {
     pub do_align: bool,
     pub use_opencv_align: bool,
     pub use_opencv_merge: bool,
+    pub use_opencv_merge_robertson: bool,
     pub use_opencv_tonemap: bool,
     pub tonemap_operator: String,
     pub tonemap_intensity: f32,
@@ -260,6 +271,7 @@ impl Default for GuiSettings {
             do_align: false,
             use_opencv_align: false,
             use_opencv_merge: false,
+            use_opencv_merge_robertson: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
@@ -278,6 +290,7 @@ impl From<&GuiSettingsConfig> for GuiSettings {
             do_align: config.do_align,
             use_opencv_align: config.use_opencv_align,
             use_opencv_merge: config.use_opencv_merge,
+            use_opencv_merge_robertson: config.use_opencv_merge_robertson,
             use_opencv_tonemap: config.use_opencv_tonemap,
             tonemap_operator: config.tonemap_operator.clone(),
             tonemap_intensity: config.tonemap_intensity,
