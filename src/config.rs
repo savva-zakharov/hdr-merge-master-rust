@@ -143,6 +143,8 @@ pub struct GuiSettingsConfig {
     pub tonemap_saturation: f32,
     #[serde(default = "default_uiscale")]
     pub uiscale: f32,
+    #[serde(default = "default_theme_name")]
+    pub theme_name: String,
 }
 
 fn default_tonemap_operator() -> String {
@@ -171,6 +173,10 @@ fn default_threads() -> u8 {
 
 fn default_uiscale() -> f32 {
     1.0
+}
+
+fn default_theme_name() -> String {
+    String::new() // Empty means system default
 }
 
 impl Default for GuiSettingsConfig {
@@ -215,6 +221,7 @@ impl Default for GuiSettingsConfig {
             tonemap_contrast: 1.0,
             tonemap_saturation: 1.0,
             uiscale: 1.0,
+            theme_name: String::new(),
         }
     }
 }

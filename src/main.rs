@@ -210,6 +210,7 @@ fn scan_folder_recursive(
 fn run_gui_mode() -> Result<(), Box<dyn std::error::Error>> {
     iced::application(ui::HdrMergeApp::new, ui::HdrMergeApp::update, ui::HdrMergeApp::view)
         .subscription(ui::HdrMergeApp::subscription)
+        .theme(ui::HdrMergeApp::theme)
         .window_size((1000.0, 600.0))
         .run()?;
 

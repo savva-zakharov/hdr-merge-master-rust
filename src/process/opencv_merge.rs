@@ -171,15 +171,15 @@ pub fn merge_with_robertson(
         times.push(t);
     }
 
-    // Calibrate camera response using CalibrateRobertson
-    let mut calibrate = create_calibrate_robertson(100, 1.0)
-        .map_err(|e| format!("Failed to create CalibrateRobertson: {}", e))?;
-    
-    let mut response: Mat = Mat::default();
-    calibrate.process(&images, &mut response, &times)
-        .map_err(|e| format!("CalibrateRobertson failed: {}", e))?;
+    // // Calibrate camera response using CalibrateRobertson
+    // let mut calibrate = create_calibrate_robertson(100, 1.0)
+    //     .map_err(|e| format!("Failed to create CalibrateRobertson: {}", e))?;
+    //
+    // let mut response: Mat = Mat::default();
+    // calibrate.process(&images, &mut response, &times)
+    //     .map_err(|e| format!("CalibrateRobertson failed: {}", e))?;
 
-    println!("    [OPENCV-MERGE] Camera response calibrated");
+    // println!("    [OPENCV-MERGE] Camera response calibrated");
 
     // Merge images using MergeRobertson
     let mut merge = create_merge_robertson()

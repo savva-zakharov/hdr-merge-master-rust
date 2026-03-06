@@ -3,7 +3,7 @@
 use iced::widget::{
     button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, text_input, Column, Row, Space,
 };
-use iced::{keyboard, Alignment, Element, Length, Subscription, Task};
+use iced::{keyboard, Alignment, Element, Length, Subscription, Task, Theme};
 use std::path::Path;
 
 use crate::config::{
@@ -26,6 +26,7 @@ pub struct HdrMergeApp {
     status_message: String,
     config: Config,
     uiscale: f32,
+    theme: Option<Theme>,
     setup_dialog: SetupDialog,
     profile_manager_dialog: ProfileManagerDialog,
     edit_profile_dialog: EditProfileDialog,
@@ -71,6 +72,12 @@ pub enum Message {
     // UI scaling
     FontSizeIncreased,
     FontSizeDecreased,
+
+    // Theme
+    ThemeChanged(Theme),
+    PreviousTheme,
+    NextTheme,
+    ClearTheme,
 }
 
 impl Default for HdrMergeApp {
@@ -95,6 +102,7 @@ impl Default for HdrMergeApp {
                 pp3_profiles: Vec::new(),
             },
             uiscale: 1.0,
+            theme: None,
             setup_dialog: SetupDialog::new(),
             profile_manager_dialog: ProfileManagerDialog::new(),
             edit_profile_dialog: EditProfileDialog::new(),
@@ -142,11 +150,19 @@ impl HdrMergeApp {
             config.pp3_profiles.iter().map(|p| p.name.clone()).collect()
         };
 
+        // Initialize theme from config
+        let theme = if config.gui_settings.theme_name.is_empty() {
+            None
+        } else {
+            Theme::ALL.iter().find(|t| format!("{:?}", t) == config.gui_settings.theme_name).cloned()
+        };
+
         let app = Self {
             config: config.clone(),
             gui_settings,
             profiles,
             uiscale: config.gui_settings.uiscale,
+            theme,
             ..Default::default()
         };
 
@@ -423,6 +439,54 @@ impl HdrMergeApp {
                     self.setup_dialog.cancel();
                 } else if let DialogMessage::Cancel = msg {
                     self.setup_dialog.cancel();
+                } else if let DialogMessage::ThemeChanged(theme_name) = msg {
+                    // Forward theme change to main app
+                    if let Some(theme) = Theme::ALL.iter().find(|t| format!("{:?}", t) == theme_name) {
+                        self.theme = Some(theme.clone());
+                        self.config.gui_settings.theme_name = theme_name;
+                        let _ = self.config.save("config.json");
+                    }
+                } else if let DialogMessage::PreviousTheme = msg {
+                    // Handle PreviousTheme from setup dialog
+                    let current = Theme::ALL.iter().position(
+                        |candidate| self.theme.as_ref() == Some(candidate)
+                    );
+                    let new_idx = current.map(|c| if c == 0 { Theme::ALL.len() - 1 } else { c - 1 }).unwrap_or(0);
+                    self.theme = Some(Theme::ALL[new_idx].clone());
+                    self.config.gui_settings.theme_name = format!("{:?}", self.theme.as_ref().unwrap());
+                    let _ = self.config.save("config.json");
+                } else if let DialogMessage::NextTheme = msg {
+                    // Handle NextTheme from setup dialog
+                    let current = Theme::ALL.iter().position(
+                        |candidate| self.theme.as_ref() == Some(candidate)
+                    );
+                    let new_idx = current.map(|c| (c + 1) % Theme::ALL.len()).unwrap_or(0);
+                    self.theme = Some(Theme::ALL[new_idx].clone());
+                    self.config.gui_settings.theme_name = format!("{:?}", self.theme.as_ref().unwrap());
+                    let _ = self.config.save("config.json");
+                } else if let DialogMessage::ClearTheme = msg {
+                    // Handle ClearTheme from setup dialog
+                    self.theme = None;
+                    self.config.gui_settings.theme_name = String::new();
+                    let _ = self.config.save("config.json");
+                } else if let DialogMessage::UIScaleIncreased = msg {
+                    // Handle uiscale increase from setup dialog
+                    self.uiscale = (self.uiscale + 0.1).min(3.0);
+                    self.config.gui_settings.uiscale = self.uiscale;
+                    let _ = self.config.save("config.json");
+                } else if let DialogMessage::UIScaleDecreased = msg {
+                    // Handle uiscale decrease from setup dialog
+                    self.uiscale = (self.uiscale - 0.1).max(0.5);
+                    self.config.gui_settings.uiscale = self.uiscale;
+                    let _ = self.config.save("config.json");
+                } else if let DialogMessage::UIScaleSliderChanged(_) = msg {
+                    // Slider is being dragged - value is tracked locally in SetupDialog
+                    // Don't update parent uiscale until release
+                } else if let DialogMessage::UIScaleSliderReleased(value) = msg {
+                    // Handle uiscale slider release from setup dialog
+                    self.uiscale = value.clamp(0.5, 3.0);
+                    self.config.gui_settings.uiscale = self.uiscale;
+                    let _ = self.config.save("config.json");
                 } else {
                     self.setup_dialog.update(msg, &mut self.config);
                 }
@@ -541,13 +605,50 @@ impl HdrMergeApp {
 
             // UI scaling
             Message::FontSizeIncreased => {
-                self.uiscale = (self.uiscale * 1.1).min(3.0); // Cap at 3x
+                self.uiscale = (self.uiscale + 0.1).min(3.0); // Cap at 3x
                 self.config.gui_settings.uiscale = self.uiscale;
                 let _ = self.config.save("config.json");
             }
             Message::FontSizeDecreased => {
-                self.uiscale = (self.uiscale * 0.9).max(0.5); // Minimum 0.5x
+                self.uiscale = (self.uiscale - 0.1).max(0.1); // Minimum 0.5x
                 self.config.gui_settings.uiscale = self.uiscale;
+                let _ = self.config.save("config.json");
+            }
+
+            // Theme
+            Message::ThemeChanged(theme) => {
+                self.theme = Some(theme.clone());
+                self.config.gui_settings.theme_name = format!("{:?}", theme);
+                let _ = self.config.save("config.json");
+            }
+            Message::PreviousTheme | Message::NextTheme => {
+                let current = Theme::ALL.iter().position(
+                    |candidate| self.theme.as_ref() == Some(candidate)
+                );
+
+                self.theme = Some(
+                    if matches!(message, Message::NextTheme) {
+                        Theme::ALL[
+                            current.map(|current| current + 1).unwrap_or(0) % Theme::ALL.len()
+                        ].clone()
+                    } else {
+                        let current = current.unwrap_or(0);
+
+                        if current == 0 {
+                            Theme::ALL.last().expect("Theme::ALL must be empty").clone()
+                        } else {
+                            Theme::ALL[current - 1].clone()
+                        }
+                    }
+                );
+                if let Some(ref theme) = self.theme {
+                    self.config.gui_settings.theme_name = format!("{:?}", theme);
+                    let _ = self.config.save("config.json");
+                }
+            }
+            Message::ClearTheme => {
+                self.theme = None;
+                self.config.gui_settings.theme_name = String::new();
                 let _ = self.config.save("config.json");
             }
         }
@@ -607,7 +708,7 @@ impl HdrMergeApp {
             .push(button(text("Add").size(12.0 * self.uiscale)).on_press(Message::AddFolder))
             .push(button(text("Remove").size(12.0 * self.uiscale)).on_press(Message::RemoveSelected))
             .push(button(text("Clear All").size(12.0 * self.uiscale)).on_press(Message::ClearAll))
-            .push(horizontal_rule((20.0 * self.uiscale) as u16))
+            .push(horizontal_rule((2.0 * self.uiscale) as u16))
             .push(button(text("Export").size(12.0 * self.uiscale)).on_press(Message::ExportBatch))
             .push(button(text("Import").size(12.0 * self.uiscale)).on_press(Message::ImportBatch))
             .push(
@@ -626,7 +727,7 @@ impl HdrMergeApp {
         // Show files for selected folder
         if let Some(index) = self.selected_index {
             if let Some(folder) = self.batch_folders.get(index) {
-                content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+                content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
                 let files_label = text(format!(
                     "Files in: {} ({} files, {} brackets, {} sets)",
                     folder.path,
@@ -662,7 +763,7 @@ impl HdrMergeApp {
             }
         }
 
-        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+        content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Profile Selection Section ==========
         let profile_label = text("PP3 Profile:").size(14.0 * self.uiscale);
@@ -701,7 +802,7 @@ impl HdrMergeApp {
             .align_y(Alignment::Center);
         content = content.push(profile_section);
 
-        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+        content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Options Section ==========
         let threads_label = text("Threads:").size(14.0 * self.uiscale);
@@ -727,10 +828,10 @@ impl HdrMergeApp {
             .align_y(Alignment::Center);
         content = content.push(options_section);
 
-        content = content.push(horizontal_rule((20.0 * self.uiscale) as u16));
+        content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Progress Bar Section ==========
-        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(20.0 * self.uiscale);
+        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(2.0 * self.uiscale);
         let status_text = text(&self.status_message).size(12.0 * self.uiscale);
         let progress_section = Row::new()
             .push(progress_bar_widget)
@@ -748,7 +849,7 @@ impl HdrMergeApp {
                 Column::new()
                     .push(main_content)
                     .push(
-                        container(self.setup_dialog.view(&self.config).map(Message::SetupDialogMsg))
+                        container(self.setup_dialog.view(&self.config, self.uiscale).map(Message::SetupDialogMsg))
                             .width(Length::Fill)
                             .height(Length::Fill),
                     )
@@ -822,6 +923,10 @@ impl HdrMergeApp {
                 _ => None,
             }
         })
+    }
+
+    pub fn theme(&self) -> Option<Theme> {
+        self.theme.clone()
     }
 }
 
