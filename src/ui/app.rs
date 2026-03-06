@@ -1,8 +1,7 @@
 //! Main application UI and state management
 
-use iced::widget::{
-    button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, text_input, Column, Row, Space,
-};
+use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, text_input, Column, Row, Space, space, Container, row, center_x};
+use iced::Length::{Fill, Shrink};
 use iced::{keyboard, Alignment, Element, Length, Subscription, Task, Theme};
 use std::path::Path;
 
@@ -46,6 +45,7 @@ pub enum Message {
     SelectProfile(String),
     ToggleRecursive(bool),
     ToggleAlign(bool),
+    ToggleFolderAlign(usize, bool),
     ToggleCleanup(bool),
     ThreadsChanged(String),
 
@@ -397,6 +397,11 @@ impl HdrMergeApp {
             Message::ToggleAlign(value) => {
                 self.gui_settings.do_align = value;
             }
+            Message::ToggleFolderAlign(index, value) => {
+                if index < self.batch_folders.len() {
+                    self.batch_folders[index].align = value;
+                }
+            }
             Message::ToggleCleanup(value) => {
                 self.gui_settings.do_cleanup = value;
             }
@@ -407,6 +412,7 @@ impl HdrMergeApp {
             // Setup dialog
             Message::OpenSetup => {
                 self.setup_dialog.open(&self.config);
+                self.profile_manager_dialog.close();
             }
             Message::SetupDialogMsg(msg) => {
                 if let DialogMessage::Save = msg {
@@ -496,6 +502,7 @@ impl HdrMergeApp {
             // Profile manager
             Message::OpenProfileManager => {
                 self.profile_manager_dialog.open();
+                self.setup_dialog.cancel();
             }
             Message::ProfileManagerMsg(msg) => {
                 match msg {
@@ -538,6 +545,27 @@ impl HdrMergeApp {
                     }
                     ProfileMessage::Close => {
                         self.profile_manager_dialog.close();
+                    }
+                    ProfileMessage::NameEdit(value, index) => {
+                        if index < self.config.pp3_profiles.len() {
+                            self.config.pp3_profiles[index].name = value.clone();
+                        }
+                        if index < self.profiles.len() {
+                            self.profiles[index] = value;
+                        }
+                        let _ = self.config.save("config.json");
+                    }
+                    ProfileMessage::PathEdit(value, index) => {
+                        if index < self.config.pp3_profiles.len() {
+                            self.config.pp3_profiles[index].file_path = value;
+                        }
+                        let _ = self.config.save("config.json");
+                    }
+                    ProfileMessage::TagEdit(value, index) => {
+                        if index < self.config.pp3_profiles.len() {
+                            self.config.pp3_profiles[index].tag = value;
+                        }
+                        let _ = self.config.save("config.json");
                     }
                 }
             }
@@ -667,13 +695,13 @@ impl HdrMergeApp {
 
         // Header row
         let header = Row::new()
-            .push(text("Folder").width(Length::FillPortion(3)))
-            .push(text("Profile").width(Length::Fill))
-            .push(text("Ext").width(Length::Fill))
-            .push(text("RAW").width(Length::Fill))
-            .push(text("Align").width(Length::Fill))
-            .push(text("Brackets").width(Length::Fill))
-            .push(text("Sets").width(Length::Fill))
+            .push(text("Folder").size(12.0 * self.uiscale).width(Length::Fill))
+            .push(text("Profile").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Ext").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("RAW").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Align").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Brackets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Sets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .spacing(10.0 * self.uiscale)
             .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
         folder_rows = folder_rows.push(header);
@@ -684,45 +712,59 @@ impl HdrMergeApp {
             let folder_row = Row::new()
                 .push(
                     button(text(if is_selected {
-                        format!("● {}", &folder.path)
+                        format!("{}", &folder.path)
                     } else {
-                        format!("○ {}", &folder.path)
-                    }))
-                    .on_press(Message::SelectFolder(i))
-                    .width(Length::FillPortion(3))
+                        format!("{}", &folder.path)
+                    }).size(12.0 * self.uiscale))
+                        
+                        .style(if is_selected{
+                            button::primary
+                        } else {
+                            button::secondary
+                        })
+                        .on_press(Message::SelectFolder(i))
+                        .width(Length::FillPortion(5))
                 )
-                .push(text(&folder.profile).width(Length::Fill))
-                .push(text(&folder.extension).width(Length::Fill))
-                .push(text(if folder.is_raw { "Yes" } else { "No" }).width(Length::Fill))
-                .push(text(if folder.align { "Yes" } else { "No" }).width(Length::Fill))
-                .push(text(folder.brackets.to_string()).width(Length::Fill))
-                .push(text(format!("{} files", folder.files.len())).width(Length::Fill))
+                .push(text(&folder.profile).width(Length::FillPortion(2)))
+                .push(center_x(text(&folder.extension).width(Length::FillPortion(1))))
+                .push(center_x(text(if folder.is_raw { "Yes" } else { "No" }).width(Length::FillPortion(1))))
+                // .push(text(if folder.align { "Yes" } else { "No" }).width(Length::Fill))
+
+                .push(center_x(checkbox(folder.align).width(Length::Shrink).on_toggle(move |value| Message::ToggleFolderAlign(i, value))))
+
+
+                .push(center_x(text(folder.brackets.to_string()).width(Length::FillPortion(1))))
+                .push(center_x(text(format!("{} files", folder.files.len())).width(Length::FillPortion(2))))
                 .spacing(10.0 * self.uiscale)
                 .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+            folder_rows= folder_rows.push(horizontal_rule(2));
             folder_rows = folder_rows.push(folder_row);
         }
 
-        let folder_scroll = scrollable(folder_rows).height(Length::Fixed(200.0 * self.uiscale));
+        let folder_scroll = container((folder_rows).height(Length::Fixed(250.0 * self.uiscale))).style(container::bordered_box)
+            ;
 
         let buttons = Column::new()
-            .spacing(4.0 * self.uiscale)
-            .push(button(text("Add").size(12.0 * self.uiscale)).on_press(Message::AddFolder))
-            .push(button(text("Remove").size(12.0 * self.uiscale)).on_press(Message::RemoveSelected))
-            .push(button(text("Clear All").size(12.0 * self.uiscale)).on_press(Message::ClearAll))
-            .push(horizontal_rule((2.0 * self.uiscale) as u16))
-            .push(button(text("Export").size(12.0 * self.uiscale)).on_press(Message::ExportBatch))
-            .push(button(text("Import").size(12.0 * self.uiscale)).on_press(Message::ImportBatch))
-            .push(
-                checkbox(self.gui_settings.do_recursive)
-                    .label("Recursive")
-                    .on_toggle(Message::ToggleRecursive),
-            );
-
-        let folders_section = Row::new()
-            .push(folder_scroll)
-            .push(buttons)
             .spacing(10.0 * self.uiscale)
-            .align_y(Alignment::Start);
+            .width(120.0 * self.uiscale)
+            .padding(10.0 * self.uiscale)
+            .push(button(text("Add").size(16.0 * self.uiscale)).on_press(Message::AddFolder).style(button::success).width(100.0 * self.uiscale))
+            .push(button(text("Remove").size(16.0 * self.uiscale)).on_press(Message::RemoveSelected).style(button::warning).width(100.0 * self.uiscale))
+            .push(button(text("Clear All").size(16.0 * self.uiscale)).on_press(Message::ClearAll).style(button::danger).width(100.0 * self.uiscale))
+            .push(checkbox(self.gui_settings.do_recursive).label("Recursive").on_toggle(Message::ToggleRecursive), )
+            .push(horizontal_rule((2.0 * self.uiscale) as u16))
+            .push(button(text("Export").size(16.0 * self.uiscale)).on_press(Message::ExportBatch).style(button::secondary).width(100.0 * self.uiscale))
+            .push(button(text("Import").size(16.0 * self.uiscale)).on_press(Message::ImportBatch).style(button::secondary).width(100.0 * self.uiscale))
+            ;
+
+
+        let folders_section =
+            row!(
+                folder_scroll,
+                buttons
+            ).spacing(10.0 * self.uiscale);
+
+
         content = content.push(Column::new().push(folders_label).push(folders_section).spacing(8.0 * self.uiscale));
 
         // Show files for selected folder
@@ -790,8 +832,9 @@ impl HdrMergeApp {
             .label(align_text)
             .on_toggle(Message::ToggleAlign);
 
-        let manage_profiles_btn = button(text("Manage Profiles...").size(12.0 * self.uiscale))
-            .on_press(Message::OpenProfileManager);
+        let manage_profiles_btn = button(text("Manage Profiles...").size(16.0 * self.uiscale))
+            .on_press(Message::OpenProfileManager)
+            .style(button::secondary);
 
         let profile_section = Row::new()
             .push(profile_label)
@@ -806,22 +849,22 @@ impl HdrMergeApp {
         content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Options Section ==========
-        let threads_label = text("Threads:").size(14.0 * self.uiscale);
-        let threads_input = text_input("Threads", &self.gui_settings.threads.to_string())
-            .on_input(Message::ThreadsChanged)
-            .width(Length::Fixed(60.0 * self.uiscale));
+        // let threads_label = text("Threads:").size(14.0 * self.uiscale);
+        // let threads_input = text_input("Threads", &self.gui_settings.threads.to_string())
+        //     .on_input(Message::ThreadsChanged)
+        //     .width(Length::Fixed(60.0 * self.uiscale));
 
-        let cleanup_checkbox = checkbox(self.gui_settings.do_cleanup)
-            .label("Cleanup temporary files")
-            .on_toggle(Message::ToggleCleanup);
+        // let cleanup_checkbox = checkbox(self.gui_settings.do_cleanup)
+        //     .label("Cleanup temporary files")
+        //     .on_toggle(Message::ToggleCleanup);
 
-        let create_hdrs_btn = button(text("Create HDRs").size(12.0 * self.uiscale)).on_press(Message::Execute);
-        let setup_btn = button(text("Setup").size(12.0 * self.uiscale)).on_press(Message::OpenSetup);
+        let create_hdrs_btn = button(text("Create HDRs").size(16.0 * self.uiscale)).on_press(Message::Execute);
+        let setup_btn = button(text("Setup").size(16.0 * self.uiscale)).on_press(Message::OpenSetup).style(button::secondary);
 
         let options_section = Row::new()
-            .push(threads_label)
-            .push(threads_input)
-            .push(cleanup_checkbox)
+            // .push(threads_label)
+            // .push(threads_input)
+            // .push(cleanup_checkbox)
             .push(horizontal_space())
             .push(create_hdrs_btn)
             .push(setup_btn)
@@ -829,11 +872,10 @@ impl HdrMergeApp {
             .align_y(Alignment::Center);
         content = content.push(options_section);
 
-        content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Progress Bar Section ==========
         let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(2.0 * self.uiscale);
-        let status_text = text(&self.status_message).size(12.0 * self.uiscale);
+        let status_text = text(&self.status_message).size(16.0 * self.uiscale);
         let progress_section = Row::new()
             .push(progress_bar_widget)
             .push(status_text)
@@ -932,7 +974,8 @@ impl HdrMergeApp {
 }
 
 fn horizontal_space() -> Element<'static, Message> {
-    Space::new().into()
+    space().width(Fill).into()
+    // Space::new().width(Fill()).into()
 }
 
 fn horizontal_rule(thickness: u16) -> Element<'static, Message> {

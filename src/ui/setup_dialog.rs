@@ -284,13 +284,12 @@ impl SetupDialog {
         .spacing(10.0 * uiscale)
         .padding(10.0 * uiscale);
 
-        center_x(
-            container(content)
+
+        center_x(container(content)
                 .height(500.0 * uiscale)
                 .max_width(1000.0 * uiscale)
                 .padding(10.0 * uiscale)
-                .style(container::rounded_box),
-        )
+                .style(container::rounded_box))
         .into()
     }
 
