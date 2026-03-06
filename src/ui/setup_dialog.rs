@@ -15,6 +15,7 @@ pub enum DialogMessage {
     ToggleOpenCvAlign(bool),
     ToggleOpenCvMerge(bool),
     ToggleOpenCvMergeRobertson(bool),
+    ToggleRustMerge(bool),
     ToggleOpenCvTonemap(bool),
     RecursiveMaxDepthChanged(String),
     TonemapOperatorChanged(String),
@@ -179,11 +180,18 @@ impl SetupDialog {
             }
             DialogMessage::ToggleOpenCvMerge(value) => {
                 config.gui_settings.use_opencv_merge = value;
-                config.gui_settings.use_opencv_merge_robertson = false; // Ensure Robertson is disabled if Merge is enabled
+                config.gui_settings.use_opencv_merge_robertson = false;
+                config.gui_settings.use_rust_merge = false;
             }
             DialogMessage::ToggleOpenCvMergeRobertson(value) => {
                 config.gui_settings.use_opencv_merge_robertson = value;
-                config.gui_settings.use_opencv_merge = false; // Ensure Debevec is also disabled if Robertson is enabled
+                config.gui_settings.use_opencv_merge = false;
+                config.gui_settings.use_rust_merge = false;
+            }
+            DialogMessage::ToggleRustMerge(value) => {
+                config.gui_settings.use_rust_merge = value;
+                config.gui_settings.use_opencv_merge = false;
+                config.gui_settings.use_opencv_merge_robertson = false;
             }
             DialogMessage::ToggleOpenCvTonemap(value) => {
                 config.gui_settings.use_opencv_tonemap = value;
@@ -375,6 +383,10 @@ impl SetupDialog {
                 .label("Use OpenCV Merge (Robertson)")
                 .on_toggle(DialogMessage::ToggleOpenCvMergeRobertson)
                 .size(uiscale * 16.0);
+        let toggle_rust_merge = toggler(config.gui_settings.use_rust_merge)
+                .label("Use Native Rust Merger")
+                .on_toggle(DialogMessage::ToggleRustMerge)
+                .size(uiscale * 16.0);
         let toggle_opencv_tonemap = toggler(config.gui_settings.use_opencv_tonemap)
                 .label("Use OpenCV Tone Mapping")
                 .on_toggle(DialogMessage::ToggleOpenCvTonemap)
@@ -388,6 +400,7 @@ impl SetupDialog {
             toggle_align_opencv,
             toggle_opencv_merge,
             toggle_robertson,
+            toggle_rust_merge,
             toggle_opencv_tonemap
         ]
             .spacing(10.0 * uiscale)

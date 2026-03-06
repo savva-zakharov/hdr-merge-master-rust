@@ -132,6 +132,8 @@ pub struct GuiSettingsConfig {
     #[serde(default)]
     pub use_opencv_merge_robertson: bool,  // Use OpenCV MergeRobertson instead of Blender (alternative to MergeDebevec)
     #[serde(default)]
+    pub use_rust_merge: bool,  // Use native Rust HDR merger
+    #[serde(default)]
     pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping instead of Luminance CLI
     #[serde(default = "default_tonemap_operator")]
     pub tonemap_operator: String,  // Reinhard, Drago, Durand, Mantiuk
@@ -215,6 +217,7 @@ impl Default for GuiSettingsConfig {
             use_opencv_align: false,
             use_opencv_merge: false,
             use_opencv_merge_robertson: false,
+            use_rust_merge: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
@@ -262,6 +265,7 @@ pub struct GuiSettings {
     pub use_opencv_align: bool,
     pub use_opencv_merge: bool,
     pub use_opencv_merge_robertson: bool,
+    pub use_rust_merge: bool,
     pub use_opencv_tonemap: bool,
     pub tonemap_operator: String,
     pub tonemap_intensity: f32,
@@ -279,6 +283,7 @@ impl Default for GuiSettings {
             use_opencv_align: false,
             use_opencv_merge: false,
             use_opencv_merge_robertson: false,
+            use_rust_merge: false,
             use_opencv_tonemap: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
@@ -298,6 +303,7 @@ impl From<&GuiSettingsConfig> for GuiSettings {
             use_opencv_align: config.use_opencv_align,
             use_opencv_merge: config.use_opencv_merge,
             use_opencv_merge_robertson: config.use_opencv_merge_robertson,
+            use_rust_merge: config.use_rust_merge,
             use_opencv_tonemap: config.use_opencv_tonemap,
             tonemap_operator: config.tonemap_operator.clone(),
             tonemap_intensity: config.tonemap_intensity,

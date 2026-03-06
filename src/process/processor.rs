@@ -151,7 +151,7 @@ pub fn process_folder(
     // which creates new files without EXIF data
     let ev_source_files = folder.files.clone();
 
-    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec/Robertson or Blender
+    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec/Robertson, Rust native merger, or Blender
     if gui_settings.use_opencv_merge {
         println!(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...",
@@ -160,6 +160,11 @@ pub fn process_folder(
     } else if gui_settings.use_opencv_merge_robertson {
         println!(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeRobertson ({} threads)...",
+            folder.sets, gui_settings.threads
+        );
+    } else if gui_settings.use_rust_merge {
+        println!(
+            "[STEP 3] Merging {} bracket sets with native Rust merger ({} threads)...",
             folder.sets, gui_settings.threads
         );
     } else {
@@ -182,6 +187,16 @@ pub fn process_folder(
         )?;
     } else if gui_settings.use_opencv_merge_robertson {
         crate::process::opencv_merge::merge_with_opencv_robertson_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &ev_source_files,
+            folder,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+        )?;
+    } else if gui_settings.use_rust_merge {
+        crate::process::rust_merge::merge_with_rust_concurrent(
             &aligned_files,
             &exr_folder,
             &ev_source_files,

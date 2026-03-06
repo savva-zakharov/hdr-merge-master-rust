@@ -131,6 +131,7 @@ impl HdrMergeApp {
             use_opencv_align: config.gui_settings.use_opencv_align,
             use_opencv_merge: config.gui_settings.use_opencv_merge,
             use_opencv_merge_robertson: config.gui_settings.use_opencv_merge_robertson,
+            use_rust_merge: config.gui_settings.use_rust_merge,
             use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
             tonemap_operator: config.gui_settings.tonemap_operator.clone(),
             tonemap_intensity: config.gui_settings.tonemap_intensity,

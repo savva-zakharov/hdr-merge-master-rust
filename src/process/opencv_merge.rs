@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use opencv::{
     prelude::*,
-    photo::{create_calibrate_debevec, create_merge_debevec, create_merge_robertson, create_calibrate_robertson},
+    photo::{create_calibrate_debevec, create_merge_debevec, create_merge_robertson, create_calibrate_robertson, MergeExposuresTrait},
     imgcodecs::{imread, IMREAD_COLOR},
     core::{Vector, Mat},
 };
@@ -171,7 +171,7 @@ pub fn merge_with_robertson(
         times.push(t);
     }
 
-    // // Calibrate camera response using CalibrateRobertson
+    // Calibrate camera response using CalibrateRobertson
     // let mut calibrate = create_calibrate_robertson(100, 1.0)
     //     .map_err(|e| format!("Failed to create CalibrateRobertson: {}", e))?;
     //
@@ -187,7 +187,9 @@ pub fn merge_with_robertson(
     
     let mut hdr: Mat = Mat::default();
     opencv::photo::MergeRobertsonTrait::process(&mut merge, &images, &mut hdr, &times)
+    // opencv::photo::MergeRobertsonTrait::process_with_response(&mut merge, &images, &mut hdr, &times, &response)
         .map_err(|e| format!("MergeRobertson failed: {}", e))?;
+    // println!("    [OPENCV-MERGE] used MergeRobertson with response");
 
     println!("    [OPENCV-MERGE] HDR image created");
 

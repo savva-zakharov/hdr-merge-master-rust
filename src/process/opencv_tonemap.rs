@@ -158,7 +158,7 @@ pub fn tone_map_hdr_to_jpg_opencv(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            println!("[OPENCV-TONEMAP] Processing: {}", filename);
+            println!("[OPENCV-TONEMAP] Processing with {}, {}, {}, {}: {}", params.operator, params.contrast, params.saturation, params.intensity, filename);
 
             // Load HDR image using image crate (supports EXR via exr crate)
             let hdr_img = image::open(&hdr_path)
