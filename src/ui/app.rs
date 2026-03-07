@@ -696,7 +696,7 @@ impl HdrMergeApp {
         // Header row
         let header = Row::new()
             .push(text("Folder").size(12.0 * self.uiscale).width(Length::Fill))
-            .push(text("Profile").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Profile").size(12.0 * self.uiscale).width(100.0 * self.uiscale))
             .push(text("Ext").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("RAW").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("Align").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
@@ -716,25 +716,16 @@ impl HdrMergeApp {
                     } else {
                         format!("{}", &folder.path)
                     }).size(12.0 * self.uiscale))
-                        
-                        .style(if is_selected{
-                            button::primary
-                        } else {
-                            button::secondary
-                        })
+                        .style(if is_selected{ button::primary } else { button::secondary })
                         .on_press(Message::SelectFolder(i))
-                        .width(Length::FillPortion(5))
+                        .width(Length::Fill)
                 )
-                .push(text(&folder.profile).width(Length::FillPortion(2)))
-                .push(center_x(text(&folder.extension).width(Length::FillPortion(1))))
-                .push(center_x(text(if folder.is_raw { "Yes" } else { "No" }).width(Length::FillPortion(1))))
-                // .push(text(if folder.align { "Yes" } else { "No" }).width(Length::Fill))
-
-                .push(center_x(checkbox(folder.align).width(Length::Shrink).on_toggle(move |value| Message::ToggleFolderAlign(i, value))))
-
-
-                .push(center_x(text(folder.brackets.to_string()).width(Length::FillPortion(1))))
-                .push(center_x(text(format!("{} files", folder.files.len())).width(Length::FillPortion(2))))
+                .push(text(&folder.profile).size(12.0 * self.uiscale).width(100.0 * self.uiscale))
+                .push(text(&folder.extension).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+                .push(text(if folder.is_raw { "Yes" } else { "No" }).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+                .push(container(checkbox(folder.align).on_toggle(move |value| Message::ToggleFolderAlign(i, value))).width(50.0 * self.uiscale))
+                .push(text(folder.brackets.to_string()).width(50.0 * self.uiscale).size(12.0 * self.uiscale))
+                .push(text(format!("{} files", folder.files.len())).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .spacing(10.0 * self.uiscale)
                 .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
             folder_rows= folder_rows.push(horizontal_rule(2));
