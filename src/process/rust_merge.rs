@@ -14,11 +14,47 @@ use image::GenericImageView;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::io::BufReader;
+use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::config::FolderEntry;
 use crate::process::ev_calc::calculate_relative_evs;
 use crate::scan_folder::ScannedFile;
+
+/// Scaling factor applied to the final merged HDR result
+/// This brings the merged values into a standard EXR range
+/// Higher values = darker output, Lower values = brighter output
+const HDR_OUTPUT_SCALE_FACTOR: f32 = 30.0;
+
+/// Thread-safe log collector for gathering log messages during parallel processing
+#[derive(Clone, Debug)]
+pub struct LogCollector {
+    messages: Arc<Mutex<Vec<String>>>,
+}
+
+impl LogCollector {
+    pub fn new() -> Self {
+        Self {
+            messages: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn log(&self, message: String) {
+        if let Ok(mut messages) = self.messages.lock() {
+            messages.push(message);
+        }
+    }
+
+    pub fn get_messages(&self) -> Vec<String> {
+        self.messages.lock().unwrap().clone()
+    }
+}
+
+impl Default for LogCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Represents an HDR image in linear f32 RGB space
 #[derive(Clone)]
@@ -106,6 +142,18 @@ impl LinearImage {
             height,
             pixels,
         })
+    }
+
+    /// Scale all pixel values by a factor
+    /// 
+    /// # Arguments
+    /// * `factor` - Scaling factor (e.g., 1.0/30.0 to reduce brightness)
+    pub fn scale(&mut self, factor: f32) {
+        for pixel in &mut self.pixels {
+            pixel[0] *= factor;
+            pixel[1] *= factor;
+            pixel[2] *= factor;
+        }
     }
 
     /// Save as EXR format with linear RGB data (OPTIMIZED - batch write)
@@ -308,6 +356,7 @@ fn save_weight_mask(
 /// * `dark_ev` - EV value of dark image (relative, positive value)
 /// * `debug_export` - Optional folder path to export debug EXR files
 /// * `debug_prefix` - Prefix for debug output filenames
+/// * `log` - Optional log collector for gathering messages
 ///
 /// # Returns
 /// Merged HDR image
@@ -318,6 +367,7 @@ pub fn merge_pair(
     dark_ev: f32,
     debug_export: Option<&Path>,
     debug_prefix: &str,
+    log: Option<&LogCollector>,
 ) -> LinearImage {
     assert_eq!(bright_img.width, dark_img.width);
     assert_eq!(bright_img.height, dark_img.height);
@@ -331,7 +381,9 @@ pub fn merge_pair(
     let ev_calc_start = Instant::now();
     let dark_to_bright_factor = ev_to_factor(dark_ev - bright_ev);
     let ev_calc_time = ev_calc_start.elapsed();
-    println!("  [MERGE] EV calculation: {:.2?} (factor: {:.3})", ev_calc_time, dark_to_bright_factor);
+    let msg = format!("  [MERGE] EV calculation: {:.2?} (factor: {:.3})", ev_calc_time, dark_to_bright_factor);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     // Export adjusted dark image if debug is enabled
     if let Some(debug_dir) = debug_export {
@@ -438,9 +490,14 @@ pub fn merge_pair(
     }
 
     let total_time = merge_start.elapsed();
-    println!("  [MERGE] Pixel processing ({} MPixels): {:.2?}",
+    let msg = format!("  [MERGE] Pixel processing ({} MPixels): {:.2?}",
              (width * height) as f32 / 1_000_000.0, pixel_process_time);
-    println!("  [MERGE] Total merge time: {:.2?}", total_time);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+    
+    let msg = format!("  [MERGE] Total merge time: {:.2?}", total_time);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     let merged = LinearImage {
         width,
@@ -452,9 +509,13 @@ pub fn merge_pair(
     if let Some(debug_dir) = debug_export {
         let debug_path = debug_dir.join(format!("{}_merged.exr", debug_prefix));
         if let Err(e) = merged.save_as_exr(&debug_path) {
-            eprintln!("  [DEBUG] Failed to save merged image: {}", e);
+            let msg = format!("  [DEBUG] Failed to save merged image: {}", e);
+            eprintln!("{}", msg);
+            if let Some(l) = log { l.log(msg); }
         } else {
-            println!("  [DEBUG] Exported: {}", debug_path.display());
+            let msg = format!("  [DEBUG] Exported: {}", debug_path.display());
+            println!("{}", msg);
+            if let Some(l) = log { l.log(msg); }
         }
     }
 
@@ -472,6 +533,7 @@ pub fn merge_pair(
 /// * `ev_values` - Relative EV values (brightest image should be 0.0, darker = positive)
 /// * `debug_export` - Optional folder path to export debug EXR files
 /// * `set_idx` - Bracket set index for naming debug files
+/// * `log` - Optional log collector for gathering messages
 ///
 /// # Returns
 /// Merged HDR image, or None if input is empty
@@ -480,6 +542,7 @@ pub fn merge_bracket_sequence(
     ev_values: &[f32],
     debug_export: Option<&Path>,
     set_idx: usize,
+    log: Option<&LogCollector>,
 ) -> Option<LinearImage> {
     if linear_images.is_empty() || linear_images.len() != ev_values.len() {
         return None;
@@ -490,21 +553,27 @@ pub fn merge_bracket_sequence(
     }
 
     let seq_start = Instant::now();
-    println!("[BRACKET_SEQ] Starting merge of {} images", linear_images.len());
+    let msg = format!("[BRACKET_SEQ] Starting merge of {} images", linear_images.len());
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     // Create debug subfolder for this set if debug is enabled
     let debug_dir;
     if let Some(base_debug_dir) = debug_export {
         debug_dir = base_debug_dir.join(format!("set_{:03}", set_idx));
         std::fs::create_dir_all(&debug_dir).ok();
-        
+
         // Export source images
         for (i, img) in linear_images.iter().enumerate() {
             let debug_path = debug_dir.join(format!("source_{:03}_ev_{:.2}.exr", i, ev_values[i]));
             if let Err(e) = img.save_as_exr(&debug_path) {
-                eprintln!("  [DEBUG] Failed to save source image {}: {}", i, e);
+                let msg = format!("  [DEBUG] Failed to save source image {}: {}", i, e);
+                eprintln!("{}", msg);
+                if let Some(l) = log { l.log(msg); }
             } else {
-                println!("  [DEBUG] Exported source: {}", debug_path.display());
+                let msg = format!("  [DEBUG] Exported source: {}", debug_path.display());
+                println!("{}", msg);
+                if let Some(l) = log { l.log(msg); }
             }
         }
     } else {
@@ -524,11 +593,13 @@ pub fn merge_bracket_sequence(
         let debug_prefix = format!("step_{:02}", i);
         let debug_path = if debug_export.is_some() { Some(debug_dir.as_path()) } else { None };
 
-        println!("[BRACKET_SEQ] Merging pair {} (EV: {:.2} + {:.2} -> {:.2})",
+        let msg = format!("[BRACKET_SEQ] Merging pair {} (EV: {:.2} + {:.2} -> {:.2})",
                  i, current_ev, next_ev, (current_ev + next_ev) * 0.5);
+        println!("{}", msg);
+        if let Some(l) = log { l.log(msg); }
 
         // Merge current result with next darker image
-        let merged = merge_pair(&current, next, current_ev, next_ev, debug_path, &debug_prefix);
+        let merged = merge_pair(&current, next, current_ev, next_ev, debug_path, &debug_prefix, log);
 
         // Update current to merged result
         // The merged image has an effective EV closer to the brighter image
@@ -536,12 +607,23 @@ pub fn merge_bracket_sequence(
         current = merged;
         current_ev = current_ev * 0.5; // Blend EV towards middle
 
-        println!("[BRACKET_SEQ] Pair {} completed in {:.2?}", i, pair_start.elapsed());
+        let msg = format!("[BRACKET_SEQ] Pair {} completed in {:.2?}", i, pair_start.elapsed());
+        println!("{}", msg);
+        if let Some(l) = log { l.log(msg); }
     }
 
-    println!("[BRACKET_SEQ] Total sequence merge time: {:.2?}", seq_start.elapsed());
+    let msg = format!("[BRACKET_SEQ] Total sequence merge time: {:.2?}", seq_start.elapsed());
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
-    Some(current)
+    // Apply output scaling factor to bring HDR values into standard EXR range
+    let mut result = current;
+    result.scale(1.0 / HDR_OUTPUT_SCALE_FACTOR);
+    let msg = format!("[BRACKET_SEQ] Applied output scale factor: 1/{}", HDR_OUTPUT_SCALE_FACTOR);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+
+    Some(result)
 }
 
 /// Merge bracketed images from file paths (OPTIMIZED)
@@ -554,6 +636,7 @@ pub fn merge_bracket_sequence(
 /// * `ev_values` - Relative EV values
 /// * `debug_export` - Optional folder path to export debug EXR files
 /// * `set_idx` - Bracket set index for naming debug files
+/// * `log` - Optional log collector for gathering messages
 ///
 /// # Returns
 /// Merged HDR image, or error message
@@ -562,6 +645,7 @@ pub fn merge_from_files(
     ev_values: &[f32],
     debug_export: Option<&Path>,
     set_idx: usize,
+    log: Option<&LogCollector>,
 ) -> Result<LinearImage, String> {
     if file_paths.is_empty() {
         return Err("No input files provided".to_string());
@@ -576,7 +660,19 @@ pub fn merge_from_files(
     }
 
     let total_start = Instant::now();
-    println!("[MERGE_FROM_FILES] Starting merge of {} files", file_paths.len());
+    let msg = format!("[MERGE_FROM_FILES] Starting merge of {} files", file_paths.len());
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+
+    // Log file names and EV values
+    for (i, (path, ev)) in file_paths.iter().zip(ev_values.iter()).enumerate() {
+        let path_name = Path::new(path).file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        let msg = format!("  [INPUT] File {}: {} (EV: {:.2})", i, path_name, ev);
+        println!("{}", msg);
+        if let Some(l) = log { l.log(msg); }
+    }
 
     // Load all images directly to LinearImage format (single conversion)
     let load_start = Instant::now();
@@ -587,7 +683,9 @@ pub fn merge_from_files(
     let load_time = load_start.elapsed();
 
     let linear_images = linear_images?;
-    println!("[MERGE_FROM_FILES] Total image loading: {:.2?}", load_time);
+    let msg = format!("[MERGE_FROM_FILES] Total image loading: {:.2?}", load_time);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     // Verify all images have the same dimensions
     let dim_check_start = Instant::now();
@@ -600,18 +698,31 @@ pub fn merge_from_files(
             ));
         }
     }
-    println!("[MERGE_FROM_FILES] Dimension check: {:.2?}", dim_check_start.elapsed());
+    let msg = format!("[MERGE_FROM_FILES] Dimension check: {:.2?}", dim_check_start.elapsed());
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     let merge_start = Instant::now();
-    let result = merge_bracket_sequence(&linear_images, ev_values, debug_export, set_idx)
+    let result = merge_bracket_sequence(&linear_images, ev_values, debug_export, set_idx, log)
         .ok_or("Failed to merge bracket sequence".to_string());
     let merge_time = merge_start.elapsed();
 
     let total_time = total_start.elapsed();
-    println!("[MERGE_FROM_FILES] Merge processing: {:.2?}", merge_time);
-    println!("[MERGE_FROM_FILES] TOTAL TIME (IO + Processing): {:.2?}", total_time);
-    println!("[MERGE_FROM_FILES]   - IO (load): {:.2?} ({:.1}%)", load_time, (load_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0);
-    println!("[MERGE_FROM_FILES]   - Processing: {:.2?} ({:.1}%)", merge_time.as_secs_f32(), (merge_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0);
+    let msg = format!("[MERGE_FROM_FILES] Merge processing: {:.2?}", merge_time);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+    
+    let msg = format!("[MERGE_FROM_FILES] TOTAL TIME (IO + Processing): {:.2?}", total_time);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+    
+    let msg = format!("[MERGE_FROM_FILES]   - IO (load): {:.2?} ({:.1}%)", load_time, (load_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
+    
+    let msg = format!("[MERGE_FROM_FILES]   - Processing: {:.2?} ({:.1}%)", merge_time.as_secs_f32(), (merge_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0);
+    println!("{}", msg);
+    if let Some(l) = log { l.log(msg); }
 
     result
 }
@@ -685,7 +796,9 @@ pub fn merge_with_rust_concurrent(
     use std::fs;
 
     let concurrent_start = Instant::now();
-    println!("[RUST_MERGE_CONCURRENT] Starting concurrent merge ({} sets, {} threads)", total_sets, threads);
+    let msg = format!("[RUST_MERGE_CONCURRENT] Starting concurrent merge ({} sets, {} threads)", total_sets, threads);
+    println!("{}", msg);
+    
     if debug_export.is_some() {
         println!("[RUST_MERGE_CONCURRENT] Debug export enabled");
     }
@@ -698,11 +811,21 @@ pub fn merge_with_rust_concurrent(
 
     // Process bracket sets in parallel, collecting log messages and timing
     let process_start = Instant::now();
-    let results: Result<Vec<(usize, Result<String, String>)>, String> = (0..total_sets as usize)
+    
+    // Create log collectors for each set
+    let log_collectors: Vec<LogCollector> = (0..total_sets as usize)
+        .map(|_| LogCollector::new())
+        .collect();
+    
+    let results: Vec<Result<(usize, Result<String, String>), String>> = (0..total_sets as usize)
         .into_par_iter()
         .map(|set_idx| {
             let set_start = Instant::now();
-            println!("[SET {}] Starting processing", set_idx);
+            let log = log_collectors[set_idx].clone();
+            
+            let msg = format!("[SET {}] Starting processing", set_idx);
+            println!("{}", msg);
+            log.log(msg);
 
             let start_idx = set_idx * folder.brackets as usize;
             let end_idx = start_idx + folder.brackets as usize;
@@ -717,20 +840,53 @@ pub fn merge_with_rust_concurrent(
             let bracket_paths = &files[start_idx..end_idx];
             let bracket_ev_files = &ev_source_files[start_idx..end_idx];
 
+            // Log input files with their exposure info
+            log.log(format!("[SET {}] Input files:", set_idx));
+            for (i, (path, ev_file)) in bracket_paths.iter().zip(bracket_ev_files.iter()).enumerate() {
+                let file_name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                let ev_info = ev_file.exposure_time.as_ref()
+                    .map(|e| format!("exp={}", e))
+                    .unwrap_or_else(|| "exp=unknown".to_string());
+                log.log(format!("  [INPUT] File {}: {} ({})", i, file_name, ev_info));
+            }
+
             // Calculate EV values for this bracket set
             let ev_start = Instant::now();
             let ev_values = calculate_relative_evs(bracket_ev_files);
-            println!("[SET {}] EV calculation: {:.2?}", set_idx, ev_start.elapsed());
+            let msg = format!("[SET {}] EV calculation: {:.2?}", set_idx, ev_start.elapsed());
+            println!("{}", msg);
+            log.log(msg);
+
+            // Log EV values for each file
+            for (i, (path, ev)) in bracket_paths.iter().zip(ev_values.iter()).enumerate() {
+                let file_name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                log.log(format!("  [EV] File {}: {} -> EV: {:.2}", i, file_name, ev));
+            }
 
             // Sort images by EV (brightest first = lowest EV)
             let sort_start = Instant::now();
             let mut indexed_images: Vec<_> = bracket_paths.iter().zip(ev_values.iter()).collect();
             indexed_images.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
-            println!("[SET {}] Sorting by EV: {:.2?}", set_idx, sort_start.elapsed());
+            let msg = format!("[SET {}] Sorting by EV: {:.2?}", set_idx, sort_start.elapsed());
+            println!("{msg}");
+            log.log(msg);
 
             // Load images in sorted order
             let sorted_paths: Vec<_> = indexed_images.iter().map(|(path, _)| (*path).clone()).collect();
             let sorted_evs: Vec<_> = indexed_images.iter().map(|(_, ev)| **ev).collect();
+
+            // Log sorted order
+            log.log(format!("[SET {}] Sorted processing order (by EV, brightest first):", set_idx));
+            for (i, (path, ev)) in sorted_paths.iter().zip(sorted_evs.iter()).enumerate() {
+                let file_name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                log.log(format!("  [ORDER] {}: {} (EV: {:.2})", i, file_name, ev));
+            }
 
             // Merge using Rust native merger (has its own detailed timing)
             let merge_start = Instant::now();
@@ -739,8 +895,11 @@ pub fn merge_with_rust_concurrent(
                 &sorted_evs,
                 debug_export,
                 set_idx,
+                Some(&log),
             )?;
-            println!("[SET {}] Merge completed: {:.2?}", set_idx, merge_start.elapsed());
+            let msg = format!("[SET {}] Merge completed: {:.2?}", set_idx, merge_start.elapsed());
+            println!("{}", msg);
+            log.log(msg);
 
             // Generate output filename
             let output_name = format!("merged_{:03}.exr", set_idx);
@@ -749,28 +908,33 @@ pub fn merge_with_rust_concurrent(
             let save_start = Instant::now();
             let exr_output = exr_folder.join(&output_name);
             merged.save_as_exr(&exr_output)?;
-            println!("[SET {}] Save completed: {:.2?}", set_idx, save_start.elapsed());
+            let msg = format!("[SET {}] Save completed: {:.2?}", set_idx, save_start.elapsed());
+            println!("{}", msg);
+            log.log(msg);
 
             let set_time = set_start.elapsed();
-            println!("[SET {}] TOTAL set processing time: {:.2?}", set_idx, set_time);
+            let msg = format!("[SET {}] TOTAL set processing time: {:.2?}", set_idx, set_time);
+            println!("{}", msg);
+            log.log(msg);
 
             // Return log message
-            Ok(format!("Set {}: Merged {} images -> {} ({:.2?})",
-                set_idx, bracket_paths.len(), output_name, set_time))
-        })
-        .map(|result| -> Result<(usize, Result<String, String>), String> {
-            // Just pass through the result with index
-            Ok((0, result))
+            Ok((set_idx, Ok(format!("Set {}: Merged {} images -> {} ({:.2?})",
+                set_idx, bracket_paths.len(), output_name, set_time))))
         })
         .collect();
 
     let process_time = process_start.elapsed();
-    println!("[RUST_MERGE_CONCURRENT] Parallel processing completed: {:.2?}", process_time);
+    let msg = format!("[RUST_MERGE_CONCURRENT] Parallel processing completed: {:.2?}", process_time);
+    println!("{}", msg);
 
     // Collect and check results
-    let results = results?;
-    let log_messages: Vec<String> = results.into_iter()
-        .filter_map(|(_, result)| result.ok())
+    let results: Vec<(usize, Result<String, String>)> = results.into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
+    
+    let log_messages: Vec<String> = results.iter()
+        .filter_map(|(_, result)| result.as_ref().ok())
+        .cloned()
         .collect();
 
     // Create log file and write all messages
@@ -779,23 +943,46 @@ pub fn merge_with_rust_concurrent(
         "rust_merge_{}.log",
         chrono::Local::now().format("%Y%m%d_%H%M%S")
     ));
+    
+    // Write header
+    let mut log_content = Vec::new();
+    log_content.push("====== Rust HDR Merge Log ======".to_string());
+    log_content.push(format!("Started: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+    log_content.push(format!("Input sets: {}, Threads: {}", total_sets, threads));
+    log_content.push(format!("Debug export: {}", if debug_export.is_some() { "enabled" } else { "disabled" }));
+    log_content.push(format!("Parallel processing time: {:.2?}", process_time));
+    log_content.push(String::new()); // Empty line
+    
+    // Add per-set logs
+    for (set_idx, _) in results.iter() {
+        log_content.push(format!("====== SET {} ======", set_idx));
+        let set_logs = log_collectors[*set_idx].get_messages();
+        log_content.extend(set_logs);
+        log_content.push(String::new()); // Empty line
+    }
+    
+    // Add summary
+    log_content.push("====== SUMMARY ======".to_string());
+    for msg in &log_messages {
+        log_content.push(msg.clone());
+    }
+    let total_time = concurrent_start.elapsed();
+    log_content.push(format!("Total concurrent merge time: {:.2?}", total_time));
+    log_content.push(format!("Average per set: {:.2?}", total_time / total_sets));
+    log_content.push(format!("Throughput: {:.1} sets/minute", (total_sets as f32) / (total_time.as_secs_f32() / 60.0)));
+    log_content.push(format!("Completed: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+    
+    // Write to file
     let mut log_file = std::fs::File::create(&log_path)
         .map_err(|e| format!("Failed to create log file: {}", e))?;
 
     use std::io::Write;
-    writeln!(log_file, "Rust HDR Merge Log").map_err(|e| e.to_string())?;
-    writeln!(log_file, "Started: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")).map_err(|e| e.to_string())?;
-    writeln!(log_file, "Input sets: {}, Threads: {}", total_sets, threads).map_err(|e| e.to_string())?;
-    writeln!(log_file, "Debug export: {}", if debug_export.is_some() { "enabled" } else { "disabled" }).map_err(|e| e.to_string())?;
-    writeln!(log_file, "Parallel processing time: {:.2?}", process_time).map_err(|e| e.to_string())?;
-
-    // Write individual messages
-    for msg in log_messages {
-        writeln!(log_file, "{}", msg).map_err(|e| e.to_string())?;
+    for line in &log_content {
+        writeln!(log_file, "{}", line).map_err(|e| e.to_string())?;
     }
-
-    writeln!(log_file, "Completed: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")).map_err(|e| e.to_string())?;
-    println!("[RUST_MERGE_CONCURRENT] Log file written: {:.2?}", log_start.elapsed());
+    
+    let msg = format!("[RUST_MERGE_CONCURRENT] Log file written: {:.2?}", log_start.elapsed());
+    println!("{}", msg);
 
     let total_time = concurrent_start.elapsed();
     println!("[RUST_MERGE_CONCURRENT] ====== SUMMARY ======");

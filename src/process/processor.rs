@@ -101,17 +101,23 @@ pub fn process_folder(
 
     // Step 2: If alignment enabled, align each bracket set with align_image_stack to Merged/aligned/
     let aligned_files = if gui_settings.do_align {
+        // Determine which align method to use
+        let use_opencv = gui_settings.use_opencv_align;
+        let empty_string = String::new();
+        
         println!(
-            "[STEP 2] Aligning {} bracket sets with align_image_stack ({} threads)...",
-            folder.sets, gui_settings.threads
+            "[STEP 2] Aligning {} bracket sets with {} ({} threads)...",
+            folder.sets,
+            if use_opencv { "OpenCV AlignMTB" } else { "align_image_stack" },
+            gui_settings.threads
         );
         let step_start = Instant::now();
         let align_folder = merged_dir.join("aligned");
         let result = align_images_by_set_concurrent(
             &source_files,
             &align_folder,
-            gui_settings.use_opencv_align,
-            &config.exe_paths.align_image_stack_exe,
+            use_opencv,
+            if use_opencv { &empty_string } else { &config.exe_paths.align_image_stack_exe },
             folder,
             &logs_dir,
             gui_settings.threads as usize,
@@ -135,7 +141,7 @@ pub fn process_folder(
     let ev_source_files = folder.files.clone();
 
     // Step 3: Merge each bracketed set using either OpenCV MergeDebevec/Robertson, Rust native merger, or Blender
-    if gui_settings.use_opencv_merge {
+    if gui_settings.use_opencv_debevec {
         println!(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...",
             folder.sets, gui_settings.threads
@@ -169,6 +175,7 @@ pub fn process_folder(
             println!("[STEP 3] File exists: {}", aligned_files[0].exists());
         }
     } else {
+        // Default to Blender merge
         println!(
             "[STEP 3] Merging {} bracket sets with Blender ({} threads)...",
             folder.sets, gui_settings.threads
@@ -182,7 +189,7 @@ pub fn process_folder(
     }
     let step_start = Instant::now();
 
-    if gui_settings.use_opencv_merge {
+    if gui_settings.use_opencv_debevec {
         crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(
             &aligned_files,
             &exr_folder,
@@ -249,11 +256,11 @@ pub fn process_folder(
     // Step 4: Tone map HDR to JPG using either OpenCV or Luminance CLI
     let jpg_folder = merged_dir.join("jpg");
 
-    // Determine which files to tone map (EXR for Blender, TIFF for OpenCV merge)
-    let hdr_folder = if gui_settings.use_opencv_merge {
+    // Determine which files to tone map (EXR for Blender/Rust, TIFF for OpenCV merge)
+    let hdr_folder = if gui_settings.use_opencv_debevec || gui_settings.use_opencv_merge_robertson {
         exr_folder.clone() // TIFF files from OpenCV merge
     } else {
-        exr_folder.clone() // EXR files from Blender
+        exr_folder.clone() // EXR files from Blender/Rust
     };
 
     if gui_settings.use_opencv_tonemap {

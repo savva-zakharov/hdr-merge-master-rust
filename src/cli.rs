@@ -49,7 +49,7 @@ pub struct Cli {
 
     /// Use OpenCV MergeDebevec instead of Blender
     #[arg(long)]
-    pub use_opencv_merge: bool,
+    pub use_opencv_debevec: bool,
 
     /// Use OpenCV MergeRobertson instead of Blender
     #[arg(long)]

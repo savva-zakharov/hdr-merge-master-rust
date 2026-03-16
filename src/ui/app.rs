@@ -131,10 +131,13 @@ impl HdrMergeApp {
             do_cleanup: config.gui_settings.do_cleanup,
             do_align: config.gui_settings.do_align,
             use_opencv_align: config.gui_settings.use_opencv_align,
-            use_opencv_merge: config.gui_settings.use_opencv_merge,
+            use_align_image_stack: config.gui_settings.use_align_image_stack,
+            use_blender_merge: config.gui_settings.use_blender_merge,
+            use_opencv_debevec: config.gui_settings.use_opencv_debevec,
             use_opencv_merge_robertson: config.gui_settings.use_opencv_merge_robertson,
             use_rust_merge: config.gui_settings.use_rust_merge,
             use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
+            use_luminance_tonemap: config.gui_settings.use_luminance_tonemap,
             rust_merge_debug_export: config.gui_settings.rust_merge_debug_export,
             tonemap_operator: config.gui_settings.tonemap_operator.clone(),
             tonemap_intensity: config.gui_settings.tonemap_intensity,
@@ -436,8 +439,8 @@ impl HdrMergeApp {
                         self.gui_settings.do_cleanup = self.config.gui_settings.do_cleanup;
                         self.gui_settings.do_align = self.config.gui_settings.do_align;
                         self.gui_settings.use_opencv_align = self.config.gui_settings.use_opencv_align;
-                        self.gui_settings.use_opencv_merge = self.config.gui_settings.use_opencv_merge;
-                        self.gui_settings.use_opencv_merge_robertson = self.config.gui_settings.use_opencv_merge_robertson;
+                        self.gui_settings.use_blender_merge = self.config.gui_settings.use_blender_merge;
+                        self.gui_settings.use_opencv_debevec = self.config.gui_settings.use_opencv_debevec;
 
                         // Update profiles from config
                         self.profiles = if self.config.pp3_profiles.is_empty() {

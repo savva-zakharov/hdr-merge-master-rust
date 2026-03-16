@@ -128,13 +128,19 @@ pub struct GuiSettingsConfig {
     #[serde(default)]
     pub use_opencv_align: bool,
     #[serde(default)]
-    pub use_opencv_merge: bool,  // Use OpenCV MergeDebevec instead of Blender
+    pub use_align_image_stack: bool,  // Use align_image_stack for alignment
     #[serde(default)]
-    pub use_opencv_merge_robertson: bool,  // Use OpenCV MergeRobertson instead of Blender (alternative to MergeDebevec)
+    pub use_blender_merge: bool,  // Use Blender HDR Merge addon
+    #[serde(default)]
+    pub use_opencv_debevec: bool,  // Use OpenCV MergeDebevec
+    #[serde(default)]
+    pub use_opencv_merge_robertson: bool,  // Use OpenCV MergeRobertson (alternative to MergeDebevec)
     #[serde(default)]
     pub use_rust_merge: bool,  // Use native Rust HDR merger
     #[serde(default)]
-    pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping instead of Luminance CLI
+    pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping
+    #[serde(default)]
+    pub use_luminance_tonemap: bool,  // Use Luminance CLI for tone mapping
     #[serde(default)]
     pub rust_merge_debug_export: bool,  // Export intermediate debug EXR files
     #[serde(default = "default_tonemap_operator")]
@@ -217,10 +223,13 @@ impl Default for GuiSettingsConfig {
             recursive_max_depth: 1,
             threads: 6,
             use_opencv_align: false,
-            use_opencv_merge: false,
+            use_align_image_stack: false,
+            use_blender_merge: false,
+            use_opencv_debevec: false,
             use_opencv_merge_robertson: false,
             use_rust_merge: false,
             use_opencv_tonemap: false,
+            use_luminance_tonemap: false,
             rust_merge_debug_export: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
@@ -263,14 +272,17 @@ pub struct FolderEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuiSettings {
     pub threads: u32,
-    pub do_recursive: bool,
-    pub do_cleanup: bool,
     pub do_align: bool,
+    pub do_cleanup: bool,
+    pub do_recursive: bool,
     pub use_opencv_align: bool,
-    pub use_opencv_merge: bool,
+    pub use_align_image_stack: bool,
+    pub use_blender_merge: bool,
+    pub use_opencv_debevec: bool,
     pub use_opencv_merge_robertson: bool,
     pub use_rust_merge: bool,
     pub use_opencv_tonemap: bool,
+    pub use_luminance_tonemap: bool,
     pub rust_merge_debug_export: bool,
     pub tonemap_operator: String,
     pub tonemap_intensity: f32,
@@ -282,14 +294,17 @@ impl Default for GuiSettings {
     fn default() -> Self {
         GuiSettings {
             threads: 6,
-            do_recursive: false,
-            do_cleanup: false,
             do_align: false,
+            do_cleanup: false,
+            do_recursive: false,
             use_opencv_align: false,
-            use_opencv_merge: false,
+            use_align_image_stack: false,
+            use_blender_merge: false,
+            use_opencv_debevec: false,
             use_opencv_merge_robertson: false,
             use_rust_merge: false,
             use_opencv_tonemap: false,
+            use_luminance_tonemap: false,
             rust_merge_debug_export: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
@@ -307,10 +322,13 @@ impl From<&GuiSettingsConfig> for GuiSettings {
             do_cleanup: config.do_cleanup,
             do_align: config.do_align,
             use_opencv_align: config.use_opencv_align,
-            use_opencv_merge: config.use_opencv_merge,
+            use_align_image_stack: config.use_align_image_stack,
+            use_blender_merge: config.use_blender_merge,
+            use_opencv_debevec: config.use_opencv_debevec,
             use_opencv_merge_robertson: config.use_opencv_merge_robertson,
             use_rust_merge: config.use_rust_merge,
             use_opencv_tonemap: config.use_opencv_tonemap,
+            use_luminance_tonemap: config.use_luminance_tonemap,
             rust_merge_debug_export: config.rust_merge_debug_export,
             tonemap_operator: config.tonemap_operator.clone(),
             tonemap_intensity: config.tonemap_intensity,
