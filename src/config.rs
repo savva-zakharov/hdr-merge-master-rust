@@ -135,6 +135,8 @@ pub struct GuiSettingsConfig {
     pub use_rust_merge: bool,  // Use native Rust HDR merger
     #[serde(default)]
     pub use_opencv_tonemap: bool,  // Use OpenCV tone mapping instead of Luminance CLI
+    #[serde(default)]
+    pub rust_merge_debug_export: bool,  // Export intermediate debug EXR files
     #[serde(default = "default_tonemap_operator")]
     pub tonemap_operator: String,  // Reinhard, Drago, Durand, Mantiuk
     #[serde(default = "default_tonemap_intensity")]
@@ -219,6 +221,7 @@ impl Default for GuiSettingsConfig {
             use_opencv_merge_robertson: false,
             use_rust_merge: false,
             use_opencv_tonemap: false,
+            rust_merge_debug_export: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
             tonemap_contrast: 1.0,
@@ -232,6 +235,7 @@ impl Default for GuiSettingsConfig {
 // ========== Application Structures ==========
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FileEntry {
     pub path: String,
     pub exif_info: Option<String>,
@@ -267,6 +271,7 @@ pub struct GuiSettings {
     pub use_opencv_merge_robertson: bool,
     pub use_rust_merge: bool,
     pub use_opencv_tonemap: bool,
+    pub rust_merge_debug_export: bool,
     pub tonemap_operator: String,
     pub tonemap_intensity: f32,
     pub tonemap_contrast: f32,
@@ -285,6 +290,7 @@ impl Default for GuiSettings {
             use_opencv_merge_robertson: false,
             use_rust_merge: false,
             use_opencv_tonemap: false,
+            rust_merge_debug_export: false,
             tonemap_operator: "Reinhard".to_string(),
             tonemap_intensity: 1.0,
             tonemap_contrast: 1.0,
@@ -305,6 +311,7 @@ impl From<&GuiSettingsConfig> for GuiSettings {
             use_opencv_merge_robertson: config.use_opencv_merge_robertson,
             use_rust_merge: config.use_rust_merge,
             use_opencv_tonemap: config.use_opencv_tonemap,
+            rust_merge_debug_export: config.rust_merge_debug_export,
             tonemap_operator: config.tonemap_operator.clone(),
             tonemap_intensity: config.tonemap_intensity,
             tonemap_contrast: config.tonemap_contrast,

@@ -32,3 +32,4 @@ dirs = "5.0"
 exr = "1.7"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+iced_aw = "0.13.1"

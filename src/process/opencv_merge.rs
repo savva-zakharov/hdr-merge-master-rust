@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use opencv::{
     prelude::*,
-    photo::{create_calibrate_debevec, create_merge_debevec, create_merge_robertson, create_calibrate_robertson, MergeExposuresTrait},
+    photo::{create_calibrate_debevec, create_merge_debevec, create_merge_robertson},
     imgcodecs::{imread, IMREAD_COLOR},
     core::{Vector, Mat},
 };

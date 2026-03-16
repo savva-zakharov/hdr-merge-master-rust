@@ -7,6 +7,7 @@ use iced::{Alignment, Element, Length, Theme};
 use crate::config::Config;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DialogMessage {
     ThreadsChanged(String),
     ToggleRecursive(bool),
@@ -16,6 +17,7 @@ pub enum DialogMessage {
     ToggleOpenCvMerge(bool),
     ToggleOpenCvMergeRobertson(bool),
     ToggleRustMerge(bool),
+    ToggleRustMergeDebug(bool),
     ToggleOpenCvTonemap(bool),
     RecursiveMaxDepthChanged(String),
     TonemapOperatorChanged(String),
@@ -193,6 +195,9 @@ impl SetupDialog {
                 config.gui_settings.use_opencv_merge = false;
                 config.gui_settings.use_opencv_merge_robertson = false;
             }
+            DialogMessage::ToggleRustMergeDebug(value) => {
+                config.gui_settings.rust_merge_debug_export = value;
+            }
             DialogMessage::ToggleOpenCvTonemap(value) => {
                 config.gui_settings.use_opencv_tonemap = value;
             }
@@ -279,15 +284,15 @@ impl SetupDialog {
             },)
             .padding(10.0 * uiscale)
             .style(iced::widget::container::bordered_box)
-            .width(1000.0 * uiscale),
+            // .width(1000.0 * uiscale),
         ]
         .spacing(10.0 * uiscale)
         .padding(10.0 * uiscale);
 
 
         center_x(container(content)
-                .height(500.0 * uiscale)
-                .max_width(1000.0 * uiscale)
+                // .height(500.0 * uiscale)
+                // .max_width(1000.0 * uiscale)
                 .padding(10.0 * uiscale)
                 .style(container::rounded_box))
         .into()
@@ -386,6 +391,10 @@ impl SetupDialog {
                 .label("Use Native Rust Merger")
                 .on_toggle(DialogMessage::ToggleRustMerge)
                 .size(uiscale * 16.0);
+        let toggle_rust_merge_debug = toggler(config.gui_settings.rust_merge_debug_export)
+                .label("Export Debug EXR Files (Rust Merge)")
+                .on_toggle(DialogMessage::ToggleRustMergeDebug)
+                .size(uiscale * 16.0);
         let toggle_opencv_tonemap = toggler(config.gui_settings.use_opencv_tonemap)
                 .label("Use OpenCV Tone Mapping")
                 .on_toggle(DialogMessage::ToggleOpenCvTonemap)
@@ -400,6 +409,7 @@ impl SetupDialog {
             toggle_opencv_merge,
             toggle_robertson,
             toggle_rust_merge,
+            toggle_rust_merge_debug,
             toggle_opencv_tonemap
         ]
             .spacing(10.0 * uiscale)
@@ -592,12 +602,12 @@ impl SetupDialog {
         column![group].into()
     }
 
-    fn view_exe_paths(&self, config: &Config, uiscale: f32) -> Element<'_, DialogMessage> {
+    fn view_exe_paths(&self, _config: &Config, uiscale: f32) -> Element<'_, DialogMessage> {
         let title = text("Executable Paths").size(16.0 * uiscale);
 
         // Align Image Stack
         let align_row = Row::new()
-            .push(text("Align Image Stack:").size(16.0 * uiscale).width(Length::Fixed(150.0 * uiscale)))
+            .push(text("Align Image Stack (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
             .push(
                 text_input("Path", &self.align_image_stack_exe)
                     .on_input(DialogMessage::AlignImageStackPathChanged)
@@ -605,9 +615,14 @@ impl SetupDialog {
             )
             .spacing(10.0 * uiscale);
 
+        let align_download = Row::new()
+            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
+            .push(text("https://hugin.sourceforge.io/download/").size(12.0 * uiscale))
+            .spacing(10.0 * uiscale);
+
         // Blender
         let blender_row = Row::new()
-            .push(text("Blender:").size(16.0 * uiscale).width(Length::Fixed(150.0 * uiscale)))
+            .push(text("Blender:").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
             .push(
                 text_input("Path", &self.blender_exe)
                     .on_input(DialogMessage::BlenderPathChanged)
@@ -617,7 +632,7 @@ impl SetupDialog {
 
         // Luminance CLI
         let luminance_row = Row::new()
-            .push(text("Luminance CLI:").size(16.0 * uiscale).width(Length::Fixed(150.0 * uiscale)))
+            .push(text("Luminance CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
             .push(
                 text_input("Path", &self.luminance_cli_exe)
                     .on_input(DialogMessage::LuminancePathChanged)
@@ -627,7 +642,7 @@ impl SetupDialog {
 
         // Rawtherapee CLI
         let rawtherapee_row = Row::new()
-            .push(text("Rawtherapee CLI:").size(16.0 * uiscale).width(Length::Fixed(150.0 * uiscale)))
+            .push(text("Rawtherapee CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
             .push(
                 text_input("Path", &self.rawtherapee_cli_exe)
                     .on_input(DialogMessage::RawtherapeePathChanged)
@@ -638,6 +653,7 @@ impl SetupDialog {
             title.center(),
             horizontal_rule((uiscale * 2.0) as u16),
             align_row,
+            align_download,
             blender_row,
             luminance_row,
             rawtherapee_row,

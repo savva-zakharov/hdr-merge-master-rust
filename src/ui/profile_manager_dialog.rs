@@ -3,7 +3,6 @@
 use iced::widget::{button, center_x, container, rule, scrollable, text, Column, Row, space, Space, text_input};
 use iced::{Element, Length};
 use iced::Length::Fill;
-use iced::widget::button::background;
 use crate::config::Profile;
 
 #[derive(Debug, Clone)]
@@ -123,6 +122,7 @@ impl ProfileManagerDialog {
     }
 }
 
+#[allow(dead_code)]
 fn horizontal_space() -> Element<'static, ProfileMessage> {
     Space::new().into()
 }

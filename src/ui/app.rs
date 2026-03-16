@@ -1,7 +1,7 @@
 //! Main application UI and state management
 
-use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, text_input, Column, Row, Space, space, Container, row, center_x};
-use iced::Length::{Fill, Shrink};
+use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, Column, Row, space, row};
+use iced::Length::Fill;
 use iced::{keyboard, Alignment, Element, Length, Subscription, Task, Theme};
 use std::path::Path;
 
@@ -33,6 +33,7 @@ pub struct HdrMergeApp {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Message {
     // Main app actions
     AddFolder,
@@ -43,6 +44,7 @@ pub enum Message {
     Execute,
     SelectFolder(usize),
     SelectProfile(String),
+    SelectFolderProfile(usize, String),
     ToggleRecursive(bool),
     ToggleAlign(bool),
     ToggleFolderAlign(usize, bool),
@@ -133,6 +135,7 @@ impl HdrMergeApp {
             use_opencv_merge_robertson: config.gui_settings.use_opencv_merge_robertson,
             use_rust_merge: config.gui_settings.use_rust_merge,
             use_opencv_tonemap: config.gui_settings.use_opencv_tonemap,
+            rust_merge_debug_export: config.gui_settings.rust_merge_debug_export,
             tonemap_operator: config.gui_settings.tonemap_operator.clone(),
             tonemap_intensity: config.gui_settings.tonemap_intensity,
             tonemap_contrast: config.gui_settings.tonemap_contrast,
@@ -389,6 +392,11 @@ impl HdrMergeApp {
                     if let Some(folder) = self.batch_folders.get_mut(index) {
                         folder.profile = profile;
                     }
+                }
+            }
+            Message::SelectFolderProfile(folder_index, profile) => {
+                if let Some(folder) = self.batch_folders.get_mut(folder_index) {
+                    folder.profile = profile;
                 }
             }
             Message::ToggleRecursive(value) => {
@@ -696,7 +704,7 @@ impl HdrMergeApp {
         // Header row
         let header = Row::new()
             .push(text("Folder").size(12.0 * self.uiscale).width(Length::Fill))
-            .push(text("Profile").size(12.0 * self.uiscale).width(100.0 * self.uiscale))
+            .push(text("Profile").size(12.0 * self.uiscale).width(150.0 * self.uiscale))
             .push(text("Ext").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("RAW").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("Align").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
@@ -720,7 +728,13 @@ impl HdrMergeApp {
                         .on_press(Message::SelectFolder(i))
                         .width(Length::Fill)
                 )
-                .push(text(&folder.profile).size(12.0 * self.uiscale).width(100.0 * self.uiscale))
+                .push(
+                    pick_list(
+                        &self.profiles[..],
+                        Some(&folder.profile),
+                        move |profile| Message::SelectFolderProfile(i, profile),
+                    ).width(150.0 * self.uiscale)
+                )
                 .push(text(&folder.extension).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .push(text(if folder.is_raw { "Yes" } else { "No" }).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .push(container(checkbox(folder.align).on_toggle(move |value| Message::ToggleFolderAlign(i, value))).width(50.0 * self.uiscale))

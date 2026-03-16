@@ -128,24 +128,7 @@ pub fn process_folder(
 
     // Step 3: Merge each bracketed set using Blender
     let exr_folder = merged_dir.join("exr");
-    let source_files_for_merge = if gui_settings.do_align {
-        // For aligned files, we need to reload from the aligned folder
-        // since alignment outputs new files
-        reload_aligned_files(&merged_dir.join("aligned"))?
-    } else {
-        // Use source files (either RAW originals or TIFFs from Step 1)
-        // We need to convert back to ScannedFile format
-        source_files
-            .iter()
-            .map(|p| crate::scan_folder::ScannedFile {
-                path: p.to_string_lossy().to_string(),
-                exposure_time: None,
-                f_number: None,
-                iso: None,
-            })
-            .collect()
-    };
-
+    
     // For EV calculation, we always use the original scanned files (folder.files)
     // This ensures we have accurate exposure information even after alignment
     // which creates new files without EXIF data
@@ -157,21 +140,45 @@ pub fn process_folder(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...",
             folder.sets, gui_settings.threads
         );
+        // Debug: Log the file paths being used for merging
+        println!("[STEP 3] Using {} files for OpenCV merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
+        if aligned_files.len() > 0 {
+            println!("[STEP 3] First file path: {}", aligned_files[0].display());
+            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
+        }
     } else if gui_settings.use_opencv_merge_robertson {
         println!(
             "[STEP 3] Merging {} bracket sets with OpenCV MergeRobertson ({} threads)...",
             folder.sets, gui_settings.threads
         );
+        // Debug: Log the file paths being used for merging
+        println!("[STEP 3] Using {} files for OpenCV Robertson merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
+        if aligned_files.len() > 0 {
+            println!("[STEP 3] First file path: {}", aligned_files[0].display());
+            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
+        }
     } else if gui_settings.use_rust_merge {
         println!(
             "[STEP 3] Merging {} bracket sets with native Rust merger ({} threads)...",
             folder.sets, gui_settings.threads
         );
+        // Debug: Log the file paths being used for merging
+        println!("[STEP 3] Using {} files for Rust merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
+        if aligned_files.len() > 0 {
+            println!("[STEP 3] First file path: {}", aligned_files[0].display());
+            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
+        }
     } else {
         println!(
             "[STEP 3] Merging {} bracket sets with Blender ({} threads)...",
             folder.sets, gui_settings.threads
         );
+        // Debug: Log the file paths being used for merging
+        println!("[STEP 3] Using {} files for Blender merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
+        if aligned_files.len() > 0 {
+            println!("[STEP 3] First file path: {}", aligned_files[0].display());
+            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
+        }
     }
     let step_start = Instant::now();
 
@@ -196,6 +203,18 @@ pub fn process_folder(
             gui_settings.threads as usize,
         )?;
     } else if gui_settings.use_rust_merge {
+        // Setup debug export folder if enabled
+        let debug_export_dir;
+        let debug_export_path = if gui_settings.rust_merge_debug_export {
+            debug_export_dir = merged_dir.join("debug_rust_merge");
+            if let Err(e) = std::fs::create_dir_all(&debug_export_dir) {
+                eprintln!("Failed to create debug export folder: {}", e);
+            }
+            Some(debug_export_dir.as_path())
+        } else {
+            None
+        };
+
         crate::process::rust_merge::merge_with_rust_concurrent(
             &aligned_files,
             &exr_folder,
@@ -204,12 +223,13 @@ pub fn process_folder(
             &logs_dir,
             folder.sets,
             gui_settings.threads as usize,
+            debug_export_path,
         )?;
     } else {
         crate::process::external_blender::merge_with_blender_concurrent(
             &aligned_files,
             &exr_folder,
-            &source_files_for_merge,
+            &ev_source_files,
             &ev_source_files,
             folder,
             &config.exe_paths.blender_exe,
@@ -518,6 +538,7 @@ fn align_single_set(
 /// Result indicating success
 
 /// Reload aligned files from the aligned directory
+#[allow(dead_code)]
 fn reload_aligned_files(align_dir: &Path) -> Result<Vec<crate::scan_folder::ScannedFile>, String> {
     let mut files = Vec::new();
 
