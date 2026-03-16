@@ -457,6 +457,82 @@ impl HdrMergeApp {
                     self.setup_dialog.cancel();
                 } else if let DialogMessage::Cancel = msg {
                     self.setup_dialog.cancel();
+                } else if let DialogMessage::BrowseAlignImageStackPath = msg {
+                    let current_path = self.setup_dialog.get_align_image_stack_exe().to_string();
+                    return Task::perform(
+                        async move {
+                            let mut file_dialog = rfd::AsyncFileDialog::new()
+                                .add_filter("Executable", &["exe", ""]);
+                            if !current_path.is_empty() {
+                                if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                    file_dialog = file_dialog.set_directory(parent);
+                                }
+                            }
+                            file_dialog.pick_file().await
+                        },
+                        |file| {
+                            Message::SetupDialogMsg(DialogMessage::AlignImageStackPathChanged(
+                                file.map(|f| f.path().to_string_lossy().to_string()).unwrap_or_default()
+                            ))
+                        },
+                    );
+                } else if let DialogMessage::BrowseBlenderPath = msg {
+                    let current_path = self.setup_dialog.get_blender_exe().to_string();
+                    return Task::perform(
+                        async move {
+                            let mut file_dialog = rfd::AsyncFileDialog::new()
+                                .add_filter("Executable", &["exe", ""]);
+                            if !current_path.is_empty() {
+                                if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                    file_dialog = file_dialog.set_directory(parent);
+                                }
+                            }
+                            file_dialog.pick_file().await
+                        },
+                        |file| {
+                            Message::SetupDialogMsg(DialogMessage::BlenderPathChanged(
+                                file.map(|f| f.path().to_string_lossy().to_string()).unwrap_or_default()
+                            ))
+                        },
+                    );
+                } else if let DialogMessage::BrowseLuminancePath = msg {
+                    let current_path = self.setup_dialog.get_luminance_cli_exe().to_string();
+                    return Task::perform(
+                        async move {
+                            let mut file_dialog = rfd::AsyncFileDialog::new()
+                                .add_filter("Executable", &["exe", ""]);
+                            if !current_path.is_empty() {
+                                if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                    file_dialog = file_dialog.set_directory(parent);
+                                }
+                            }
+                            file_dialog.pick_file().await
+                        },
+                        |file| {
+                            Message::SetupDialogMsg(DialogMessage::LuminancePathChanged(
+                                file.map(|f| f.path().to_string_lossy().to_string()).unwrap_or_default()
+                            ))
+                        },
+                    );
+                } else if let DialogMessage::BrowseRawtherapeePath = msg {
+                    let current_path = self.setup_dialog.get_rawtherapee_cli_exe().to_string();
+                    return Task::perform(
+                        async move {
+                            let mut file_dialog = rfd::AsyncFileDialog::new()
+                                .add_filter("Executable", &["exe", ""]);
+                            if !current_path.is_empty() {
+                                if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                    file_dialog = file_dialog.set_directory(parent);
+                                }
+                            }
+                            file_dialog.pick_file().await
+                        },
+                        |file| {
+                            Message::SetupDialogMsg(DialogMessage::RawtherapeePathChanged(
+                                file.map(|f| f.path().to_string_lossy().to_string()).unwrap_or_default()
+                            ))
+                        },
+                    );
                 } else if let DialogMessage::ThemeChanged(theme_name) = msg {
                     // Forward theme change to main app
                     if let Some(theme) = Theme::ALL.iter().find(|t| format!("{:?}", t) == theme_name) {

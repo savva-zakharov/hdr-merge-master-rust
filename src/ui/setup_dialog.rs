@@ -31,9 +31,14 @@ pub enum DialogMessage {
     RawExtensionsChanged(String),
     RecursiveIgnoreFoldersChanged(String),
     AlignImageStackPathChanged(String),
+    BrowseAlignImageStackPath,
     BlenderPathChanged(String),
+    BrowseBlenderPath,
     LuminancePathChanged(String),
+    BrowseLuminancePath,
     RawtherapeePathChanged(String),
+    BrowseRawtherapeePath,
+    OpenUrl(String),
     ProcessPage,
     FolderPage,
     GuiPage,
@@ -110,6 +115,22 @@ impl SetupDialog {
             setup_page: "process_page".to_string(),
             uiscale_slider_value: 1.0,
         }
+    }
+
+    pub fn get_align_image_stack_exe(&self) -> &str {
+        &self.align_image_stack_exe
+    }
+
+    pub fn get_blender_exe(&self) -> &str {
+        &self.blender_exe
+    }
+
+    pub fn get_luminance_cli_exe(&self) -> &str {
+        &self.luminance_cli_exe
+    }
+
+    pub fn get_rawtherapee_cli_exe(&self) -> &str {
+        &self.rawtherapee_cli_exe
     }
 
     pub fn open(&mut self, config: &Config) {
@@ -262,6 +283,16 @@ impl SetupDialog {
             }
             DialogMessage::RawtherapeePathChanged(value) => {
                 self.rawtherapee_cli_exe = value;
+            }
+            DialogMessage::BrowseAlignImageStackPath
+            | DialogMessage::BrowseBlenderPath
+            | DialogMessage::BrowseLuminancePath
+            | DialogMessage::BrowseRawtherapeePath => {
+                // File browsing is handled by the main app
+            }
+            DialogMessage::OpenUrl(url) => {
+                // Open URL in default browser
+                let _ = open::that(url.as_str());
             }
             DialogMessage::Save | DialogMessage::Cancel => {}
             DialogMessage::ProcessPage => self.setup_page = "process_page".to_string(),
@@ -709,50 +740,105 @@ impl SetupDialog {
                     .on_input(DialogMessage::AlignImageStackPathChanged)
                     .width(Length::Fill),
             )
+            .push(
+                button(text("Browse...").size(14.0 * uiscale))
+                    .on_press(DialogMessage::BrowseAlignImageStackPath)
+                    .style(button::secondary)
+            )
             .spacing(10.0 * uiscale);
 
         let align_download = Row::new()
-            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
-            .push(text("https://hugin.sourceforge.io/download/").size(12.0 * uiscale))
+            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
+            .push(
+                button(text("https://hugin.sourceforge.io/download/").size(12.0 * uiscale).color(iced::Color::from_rgb(0.0, 0.45, 0.8)))
+                    .on_press(DialogMessage::OpenUrl("https://hugin.sourceforge.io/download/".to_string()))
+                    .style(button::secondary)
+            )
             .spacing(10.0 * uiscale);
 
         // Blender
         let blender_row = Row::new()
-            .push(text("Blender:").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
+            .push(text("Blender:").size(16.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
             .push(
                 text_input("Path", &self.blender_exe)
                     .on_input(DialogMessage::BlenderPathChanged)
                     .width(Length::Fill),
             )
+            .push(
+                button(text("Browse...").size(14.0 * uiscale))
+                    .on_press(DialogMessage::BrowseBlenderPath)
+                    .style(button::secondary)
+            )
+            .spacing(10.0 * uiscale);
+
+        let blender_download = Row::new()
+            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
+            .push(
+                button(text("https://www.blender.org/download/lts/").size(12.0 * uiscale).color(iced::Color::from_rgb(0.0, 0.45, 0.8)))
+                    .on_press(DialogMessage::OpenUrl("https://www.blender.org/download/lts/".to_string()))
+                    .style(button::secondary)
+            )
             .spacing(10.0 * uiscale);
 
         // Luminance CLI
         let luminance_row = Row::new()
-            .push(text("Luminance CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
+            .push(text("Luminance CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
             .push(
                 text_input("Path", &self.luminance_cli_exe)
                     .on_input(DialogMessage::LuminancePathChanged)
                     .width(Length::Fill),
             )
+            .push(
+                button(text("Browse...").size(14.0 * uiscale))
+                    .on_press(DialogMessage::BrowseLuminancePath)
+                    .style(button::secondary)
+            )
+            .spacing(10.0 * uiscale);
+
+        let luminance_download = Row::new()
+            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
+            .push(
+                button(text("https://sourceforge.net/projects/qtpfsgui/").size(12.0 * uiscale).color(iced::Color::from_rgb(0.0, 0.45, 0.8)))
+                    .on_press(DialogMessage::OpenUrl("https://sourceforge.net/projects/qtpfsgui/".to_string()))
+                    .style(button::secondary)
+            )
             .spacing(10.0 * uiscale);
 
         // Rawtherapee CLI
         let rawtherapee_row = Row::new()
-            .push(text("Rawtherapee CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
+            .push(text("RawTherapee CLI (Optional):").size(16.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
             .push(
                 text_input("Path", &self.rawtherapee_cli_exe)
                     .on_input(DialogMessage::RawtherapeePathChanged)
                     .width(Length::Fill),
             )
+            .push(
+                button(text("Browse...").size(14.0 * uiscale))
+                    .on_press(DialogMessage::BrowseRawtherapeePath)
+                    .style(button::secondary)
+            )
             .spacing(10.0 * uiscale);
+
+        let rawtherapee_download = Row::new()
+            .push(text("Download:").size(12.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
+            .push(
+                button(text("https://rawtherapee.com/downloads/5.12/").size(12.0 * uiscale).color(iced::Color::from_rgb(0.0, 0.45, 0.8)))
+                    .on_press(DialogMessage::OpenUrl("https://rawtherapee.com/downloads/5.12/".to_string()))
+                    .style(button::secondary)
+            )
+            .spacing(10.0 * uiscale);
+
         column![
             title.center(),
             horizontal_rule((uiscale * 2.0) as u16),
             align_row,
             align_download,
             blender_row,
+            blender_download,
             luminance_row,
+            luminance_download,
             rawtherapee_row,
+            rawtherapee_download,
         ]
         .max_width(1000.0 * uiscale)
         .spacing(10.0 * uiscale)
