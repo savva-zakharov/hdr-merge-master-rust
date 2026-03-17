@@ -74,8 +74,18 @@ pub fn align_set_with_opencv(
         // Convert grayscale to BGR if needed (IMREAD_UNCHANGED might load as grayscale)
         if color.channels() == 1 {
             let mut color_bgr = Mat::default();
-            imgproc::cvt_color(&color, &mut color_bgr, imgproc::COLOR_GRAY2BGR, 0)
-                .map_err(|e| format!("Failed to convert to BGR: {}", e))?;
+            // Different OpenCV versions have different cvt_color signatures
+            // Newer versions (4.5+) require AlgorithmHint, older versions don't
+            #[cfg(any(opencv_4_5, opencv_4_6, opencv_4_7, opencv_4_8, opencv_4_9, opencv_4_x))]
+            {
+                imgproc::cvt_color(&color, &mut color_bgr, imgproc::COLOR_GRAY2BGR, 0, opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT)
+                    .map_err(|e| format!("Failed to convert to BGR: {}", e))?;
+            }
+            #[cfg(not(any(opencv_4_5, opencv_4_6, opencv_4_7, opencv_4_8, opencv_4_9, opencv_4_x)))]
+            {
+                imgproc::cvt_color(&color, &mut color_bgr, imgproc::COLOR_GRAY2BGR, 0)
+                    .map_err(|e| format!("Failed to convert to BGR: {}", e))?;
+            }
             color_images.push(color_bgr);
         } else {
             color_images.push(color);
