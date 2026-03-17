@@ -6,6 +6,29 @@ use iced::{Alignment, Element, Length, Theme};
 
 use crate::config::Config;
 
+/// Alignment method selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlignMethod {
+    AlignImageStack,
+    OpenCvAlign,
+}
+
+/// HDR merge method selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeMethod {
+    Blender,
+    OpenCvDebevec,
+    OpenCvRobertson,
+    Rust,
+}
+
+/// Tone mapping method selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TonemapMethod {
+    Luminance,
+    OpenCv,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum DialogMessage {
@@ -13,15 +36,10 @@ pub enum DialogMessage {
     ToggleRecursive(bool),
     ToggleCleanup(bool),
     ToggleAlign(bool),
-    ToggleOpenCvAlign(bool),
-    ToggleAlignImageStack(bool),
-    ToggleBlenderMerge(bool),
-    ToggleOpenCvDebevec(bool),
-    ToggleOpenCvMergeRobertson(bool),
-    ToggleRustMerge(bool),
+    AlignMethodSelected(AlignMethod),
+    MergeMethodSelected(MergeMethod),
+    TonemapMethodSelected(TonemapMethod),
     ToggleRustMergeDebug(bool),
-    ToggleOpenCvTonemap(bool),
-    ToggleLuminanceTonemap(bool),
     RecursiveMaxDepthChanged(String),
     TonemapOperatorChanged(String),
     TonemapIntensityChanged(String),
@@ -201,52 +219,63 @@ impl SetupDialog {
             DialogMessage::ToggleAlign(value) => {
                 config.gui_settings.do_align = value;
             }
-            DialogMessage::ToggleOpenCvAlign(value) => {
-                config.gui_settings.use_opencv_align = value;
-                config.gui_settings.use_align_image_stack = !value;
+            DialogMessage::AlignMethodSelected(method) => {
+                // Update config based on selected alignment method
+                match method {
+                    AlignMethod::AlignImageStack => {
+                        config.gui_settings.use_align_image_stack = true;
+                        config.gui_settings.use_opencv_align = false;
+                    }
+                    AlignMethod::OpenCvAlign => {
+                        config.gui_settings.use_align_image_stack = false;
+                        config.gui_settings.use_opencv_align = true;
+                    }
+                }
             }
-            DialogMessage::ToggleAlignImageStack(value) => {
-                config.gui_settings.use_align_image_stack = value;
-                config.gui_settings.use_opencv_align = !value;
+            DialogMessage::MergeMethodSelected(method) => {
+                // Update config based on selected merge method
+                match method {
+                    MergeMethod::Blender => {
+                        config.gui_settings.use_blender_merge = true;
+                        config.gui_settings.use_opencv_debevec = false;
+                        config.gui_settings.use_opencv_merge_robertson = false;
+                        config.gui_settings.use_rust_merge = false;
+                    }
+                    MergeMethod::OpenCvDebevec => {
+                        config.gui_settings.use_blender_merge = false;
+                        config.gui_settings.use_opencv_debevec = true;
+                        config.gui_settings.use_opencv_merge_robertson = false;
+                        config.gui_settings.use_rust_merge = false;
+                    }
+                    MergeMethod::OpenCvRobertson => {
+                        config.gui_settings.use_blender_merge = false;
+                        config.gui_settings.use_opencv_debevec = false;
+                        config.gui_settings.use_opencv_merge_robertson = true;
+                        config.gui_settings.use_rust_merge = false;
+                    }
+                    MergeMethod::Rust => {
+                        config.gui_settings.use_blender_merge = false;
+                        config.gui_settings.use_opencv_debevec = false;
+                        config.gui_settings.use_opencv_merge_robertson = false;
+                        config.gui_settings.use_rust_merge = true;
+                    }
+                }
             }
-            DialogMessage::ToggleBlenderMerge(value) => {
-                // Mutually exclusive: only one merge method can be active
-                config.gui_settings.use_blender_merge = value;
-                config.gui_settings.use_opencv_debevec = false;
-                config.gui_settings.use_opencv_merge_robertson = false;
-                config.gui_settings.use_rust_merge = false;
-            }
-            DialogMessage::ToggleOpenCvDebevec(value) => {
-                // Mutually exclusive: only one merge method can be active
-                config.gui_settings.use_opencv_debevec = value;
-                config.gui_settings.use_blender_merge = false;
-                config.gui_settings.use_opencv_merge_robertson = false;
-                config.gui_settings.use_rust_merge = false;
-            }
-            DialogMessage::ToggleOpenCvMergeRobertson(value) => {
-                // Mutually exclusive: only one merge method can be active
-                config.gui_settings.use_opencv_merge_robertson = value;
-                config.gui_settings.use_blender_merge = false;
-                config.gui_settings.use_opencv_debevec = false;
-                config.gui_settings.use_rust_merge = false;
-            }
-            DialogMessage::ToggleRustMerge(value) => {
-                // Mutually exclusive: only one merge method can be active
-                config.gui_settings.use_rust_merge = value;
-                config.gui_settings.use_blender_merge = false;
-                config.gui_settings.use_opencv_debevec = false;
-                config.gui_settings.use_opencv_merge_robertson = false;
+            DialogMessage::TonemapMethodSelected(method) => {
+                // Update config based on selected tone mapping method
+                match method {
+                    TonemapMethod::Luminance => {
+                        config.gui_settings.use_luminance_tonemap = true;
+                        config.gui_settings.use_opencv_tonemap = false;
+                    }
+                    TonemapMethod::OpenCv => {
+                        config.gui_settings.use_luminance_tonemap = false;
+                        config.gui_settings.use_opencv_tonemap = true;
+                    }
+                }
             }
             DialogMessage::ToggleRustMergeDebug(value) => {
                 config.gui_settings.rust_merge_debug_export = value;
-            }
-            DialogMessage::ToggleOpenCvTonemap(value) => {
-                config.gui_settings.use_opencv_tonemap = value;
-                config.gui_settings.use_luminance_tonemap = !value;
-            }
-            DialogMessage::ToggleLuminanceTonemap(value) => {
-                config.gui_settings.use_luminance_tonemap = value;
-                config.gui_settings.use_opencv_tonemap = !value;
             }
             DialogMessage::RecursiveMaxDepthChanged(value) => {
                 self.recursive_max_depth_str = value;
@@ -425,121 +454,133 @@ impl SetupDialog {
             )
             .spacing(10.0 * uiscale);
 
-
-        // Checkboxes
-
         // Check if external executables are configured
         let align_image_stack_configured = !config.exe_paths.align_image_stack_exe.is_empty();
         let luminance_cli_configured = !config.exe_paths.luminance_cli_exe.is_empty();
         let blender_configured = !config.exe_paths.blender_exe.is_empty();
 
-        // Align Images master toggle
+        // Enable Image Alignment toggle
         let toggle_align = toggler(config.gui_settings.do_align)
             .label("Enable Image Alignment")
             .on_toggle(DialogMessage::ToggleAlign)
             .size(uiscale * 16.0);
 
-        // Align method toggles (mutually exclusive)
-        // If align_image_stack is not configured, both toggles are disabled but show current state
-        let toggle_align_image_stack = toggler(config.gui_settings.use_align_image_stack)
-            .label(format!("Use align_image_stack{}", if !align_image_stack_configured { " (not configured)" } else { "" }))
-            .size(uiscale * 16.0);
-        let toggle_align_image_stack = if align_image_stack_configured {
-            toggle_align_image_stack.on_toggle(DialogMessage::ToggleAlignImageStack)
+        // Alignment method radio buttons
+        let current_align_method = if config.gui_settings.use_align_image_stack {
+            AlignMethod::AlignImageStack
         } else {
-            toggle_align_image_stack // Disabled but keeps showing current state
+            AlignMethod::OpenCvAlign
         };
 
-        // OpenCV Align toggle - disabled if align_image_stack exe not configured
-        let toggle_align_opencv = toggler(config.gui_settings.use_opencv_align)
-            .label("Use OpenCV Align (AlignMTB)")
-            .size(uiscale * 16.0);
-        let toggle_align_opencv = if align_image_stack_configured {
-            toggle_align_opencv.on_toggle(DialogMessage::ToggleOpenCvAlign)
+        let align_radio_blender = radio(
+            "align_image_stack",
+            AlignMethod::AlignImageStack,
+            Some(current_align_method),
+            DialogMessage::AlignMethodSelected,
+        ).size(uiscale * 14.0);
+        
+        let align_radio_blender = if align_image_stack_configured {
+            align_radio_blender
         } else {
-            toggle_align_opencv // Disabled but keeps showing current state
+            align_radio_blender.size(uiscale * 14.0) // Disabled appearance
         };
 
-        // Blender toggle - disabled if not configured
-        let toggle_blender_merge = toggler(config.gui_settings.use_blender_merge)
-            .label(format!("Use Blender Merge (Zaal){}", if !blender_configured { " (not configured)" } else { "" }))
-            .size(uiscale * 16.0);
-        let toggle_blender_merge = if blender_configured {
-            toggle_blender_merge.on_toggle(DialogMessage::ToggleBlenderMerge)
+        let align_radio_opencv = radio(
+            "OpenCV Align (AlignMTB)",
+            AlignMethod::OpenCvAlign,
+            Some(current_align_method),
+            DialogMessage::AlignMethodSelected,
+        ).size(uiscale * 14.0);
+
+        // HDR Merge method radio buttons
+        let current_merge_method = if config.gui_settings.use_blender_merge {
+            MergeMethod::Blender
+        } else if config.gui_settings.use_opencv_debevec {
+            MergeMethod::OpenCvDebevec
+        } else if config.gui_settings.use_opencv_merge_robertson {
+            MergeMethod::OpenCvRobertson
         } else {
-            toggle_blender_merge // Disabled
+            MergeMethod::Rust
         };
 
-        let toggle_opencv_debevec = toggler(config.gui_settings.use_opencv_debevec)
-                .label("Use OpenCV Merge (Debevec)")
-                .on_toggle(DialogMessage::ToggleOpenCvDebevec)
-                .size(uiscale * 16.0);
-        let toggle_robertson = toggler(config.gui_settings.use_opencv_merge_robertson)
-                .label("Use OpenCV Merge (Robertson)")
-                .on_toggle(DialogMessage::ToggleOpenCvMergeRobertson)
-                .size(uiscale * 16.0);
-        let toggle_rust_merge = toggler(config.gui_settings.use_rust_merge)
-                .label("Use Rust Merge (Zaal)")
-                .on_toggle(DialogMessage::ToggleRustMerge)
-                .size(uiscale * 16.0);
+        let merge_radio_blender = radio(
+            format!("Blender Merge{}", if !blender_configured { " (not configured)" } else { "" }),
+            MergeMethod::Blender,
+            Some(current_merge_method),
+            DialogMessage::MergeMethodSelected,
+        ).size(uiscale * 14.0);
+
+        let merge_radio_debevec = radio(
+            "OpenCV Merge (Debevec)",
+            MergeMethod::OpenCvDebevec,
+            Some(current_merge_method),
+            DialogMessage::MergeMethodSelected,
+        ).size(uiscale * 14.0);
+
+        let merge_radio_robertson = radio(
+            "OpenCV Merge (Robertson)",
+            MergeMethod::OpenCvRobertson,
+            Some(current_merge_method),
+            DialogMessage::MergeMethodSelected,
+        ).size(uiscale * 14.0);
+
+        let merge_radio_rust = radio(
+            "Rust Merge (Zaal)",
+            MergeMethod::Rust,
+            Some(current_merge_method),
+            DialogMessage::MergeMethodSelected,
+        ).size(uiscale * 14.0);
+
+        // Debug export toggle (only relevant for Rust merge)
         let toggle_rust_merge_debug = toggler(config.gui_settings.rust_merge_debug_export)
-                .label("Export Debug EXR Files (Rust Merge)")
-                .on_toggle(DialogMessage::ToggleRustMergeDebug)
-                .size(uiscale * 16.0);
-
-        // Tone mapping method toggles (mutually exclusive)
-        // If Luminance CLI is not configured, both toggles are disabled but show current state
-        let toggle_luminance_tonemap = toggler(config.gui_settings.use_luminance_tonemap)
-            .label(format!("Use Luminance CLI{}", if !luminance_cli_configured { " (not configured)" } else { "" }))
+            .label("Export Debug EXR Files (Rust Merge)")
+            .on_toggle(DialogMessage::ToggleRustMergeDebug)
             .size(uiscale * 16.0);
-        let toggle_luminance_tonemap = if luminance_cli_configured {
-            toggle_luminance_tonemap.on_toggle(DialogMessage::ToggleLuminanceTonemap)
+
+        // Tone mapping method radio buttons
+        let current_tonemap_method = if config.gui_settings.use_luminance_tonemap {
+            TonemapMethod::Luminance
         } else {
-            toggle_luminance_tonemap // Disabled but keeps showing current state
+            TonemapMethod::OpenCv
         };
 
-        // OpenCV Tone Map toggle - disabled if Luminance CLI exe not configured
-        let toggle_opencv_tonemap = toggler(config.gui_settings.use_opencv_tonemap)
-            .label("Use OpenCV Tone Mapping")
-            .size(uiscale * 16.0);
-        let toggle_opencv_tonemap = if luminance_cli_configured {
-            toggle_opencv_tonemap.on_toggle(DialogMessage::ToggleOpenCvTonemap)
-        } else {
-            toggle_opencv_tonemap // Disabled but keeps showing current state
-        };
+        let tonemap_radio_luminance = radio(
+            format!("Luminance CLI{}", if !luminance_cli_configured { " (not configured)" } else { "" }),
+            TonemapMethod::Luminance,
+            Some(current_tonemap_method),
+            DialogMessage::TonemapMethodSelected,
+        ).size(uiscale * 14.0);
+
+        let tonemap_radio_opencv = radio(
+            "OpenCV Tone Mapping",
+            TonemapMethod::OpenCv,
+            Some(current_tonemap_method),
+            DialogMessage::TonemapMethodSelected,
+        ).size(uiscale * 14.0);
 
         let process_column = column![
             title,
             horizontal_rule((2.0 * uiscale) as u16),
             threads_row,
             horizontal_rule((1.0 * uiscale) as u16),
-            text("Alignment:").size(14.0 * uiscale),
             toggle_align,
-            row![
-                space().width(20.0 * uiscale),
-                column![
-                    toggle_align_image_stack,
-                    toggle_align_opencv,
-                ].spacing(5.0 * uiscale)
-            ].spacing(10.0 * uiscale),
+            horizontal_rule((0.5 * uiscale) as u16),
+            text("Alignment Method:").size(14.0 * uiscale),
+            align_radio_blender,
+            align_radio_opencv,
             horizontal_rule((1.0 * uiscale) as u16),
             text("HDR Merge Method:").size(14.0 * uiscale),
-            toggle_blender_merge,
-            toggle_opencv_debevec,
-            toggle_robertson,
-            toggle_rust_merge,
+            merge_radio_blender,
+            merge_radio_debevec,
+            merge_radio_robertson,
+            merge_radio_rust,
             toggle_rust_merge_debug,
             horizontal_rule((1.0 * uiscale) as u16),
-            text("Tone Mapping:").size(14.0 * uiscale),
-            row![
-                space().width(20.0 * uiscale),
-                column![
-                    toggle_luminance_tonemap,
-                    toggle_opencv_tonemap,
-                ].spacing(5.0 * uiscale)
-            ].spacing(10.0 * uiscale),
+            text("Tone Mapping Method:").size(14.0 * uiscale),
+            tonemap_radio_luminance,
+            tonemap_radio_opencv,
         ]
-            .spacing(10.0 * uiscale)
+            .spacing(8.0 * uiscale)
             .padding(10.0 * uiscale);
 
 

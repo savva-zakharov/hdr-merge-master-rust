@@ -359,13 +359,18 @@ fn save_weight_mask(
 ///
 /// The algorithm:
 /// 1. Adjust both images to a common exposure baseline
-/// 2. For each pixel, calculate weights based on overexposure (using ORIGINAL images before adjustment)
-/// 3. Darker image contributes more where brighter image is overexposed
+/// 2. For each pixel, calculate weights based on overexposure (using the previous bright image)
+/// 3. Darker image contributes more where the reference image is overexposed
 /// 4. Blend using calculated weights
 ///
 /// # Arguments
-/// * `bright_img` - Brighter image (shorter exposure, captures highlights)
-/// * `dark_img` - Darker image (longer exposure, captures shadows)
+/// * `bright_img` - Current accumulated merge result (or first source image for step 1)
+/// * `dark_img` - Next darker source image to merge in
+/// * `reference_img` - The image to use for overexposure weight calculation
+///   - For step 1: image[0] (brightest source)
+///   - For step 2: image[1] (previous dark image)
+///   - For step 3: image[2] (previous dark image)
+///   - etc.
 /// * `bright_ev` - EV value of bright image (relative, brightest = 0)
 /// * `dark_ev` - EV value of dark image (relative, positive value)
 /// * `debug_export` - Optional folder path to export debug EXR files
@@ -377,6 +382,7 @@ fn save_weight_mask(
 pub fn merge_pair(
     bright_img: &LinearImage,
     dark_img: &LinearImage,
+    reference_img: &LinearImage,
     bright_ev: f32,
     dark_ev: f32,
     debug_export: Option<&Path>,
@@ -385,6 +391,8 @@ pub fn merge_pair(
 ) -> LinearImage {
     assert_eq!(bright_img.width, dark_img.width);
     assert_eq!(bright_img.height, dark_img.height);
+    assert_eq!(reference_img.width, dark_img.width);
+    assert_eq!(reference_img.height, dark_img.height);
 
     let merge_start = Instant::now();
     let width = bright_img.width;
@@ -422,11 +430,12 @@ pub fn merge_pair(
 
     // Process pixels in parallel, collecting results and weights
     let pixel_process_start = Instant::now();
-    
+
     // Collect pixels and weights together in parallel, then separate
     let pixel_weight_data: Vec<([f32; 3], f32, f32, f32)> = (0..bright_img.pixels.len()).into_par_iter().map(|i| {
         let bright_pixel = bright_img.pixels[i];
         let dark_pixel_original = dark_img.pixels[i];
+        let reference_pixel = reference_img.pixels[i];
 
         // Adjust dark image to match bright image's exposure
         let dark_pixel_adjusted = [
@@ -435,27 +444,26 @@ pub fn merge_pair(
             dark_pixel_original[2] * dark_to_bright_factor,
         ];
 
-        // Calculate overexposure weights using ORIGINAL images (before exposure adjustment)
-        // This ensures weights are based on actual captured data, not adjusted values
-        // Bright image weight: high where it's NOT overexposed (good highlight data)
-        let bright_weight = overexposure_weight(bright_pixel, 0.5);
+        // Calculate overexposure weights using the REFERENCE image
+        // This is the previous dark image from the last merge step (or brightest for step 1)
+        let bright_weight = overexposure_weight(reference_pixel, 0.5);
 
-        // Dark image weight: high where bright image IS overexposed
+        // Dark image weight: high where reference image IS overexposed
         // (dark image has better data there)
         let dark_weight = 1.0 - bright_weight;
 
-        // Add luminance weighting for smoother transitions (using original pixels)
-        let bright_lum_weight = luminance_weight(bright_pixel);
-        let dark_lum_weight = luminance_weight(dark_pixel_original);
+        // Add luminance weighting for smoother transitions (using current bright and original dark pixels)
+        // let bright_lum_weight = luminance_weight(bright_pixel);
+        // let dark_lum_weight = luminance_weight(dark_pixel_original);
 
         // Combine weights
-        let total_weight = bright_weight * bright_lum_weight + dark_weight * dark_lum_weight;
+        let total_weight = bright_weight + dark_weight;
         // let total_weight = dark_weight + bright_weight;
 
         let merged_pixel = if total_weight > 0.0001 {
             // Weighted blend using ADJUSTED dark pixel
-            let bright_contrib = bright_weight * bright_lum_weight;
-            let dark_contrib = dark_weight * dark_lum_weight;
+            let bright_contrib = bright_weight;
+            let dark_contrib = dark_weight;
 
             [
                 (bright_pixel[0] * bright_contrib + dark_pixel_adjusted[0] * dark_contrib) / total_weight,
@@ -613,8 +621,18 @@ pub fn merge_bracket_sequence(
         println!("{}", msg);
         if let Some(l) = log { l.log(msg); }
 
+        // Determine reference image for overexposure weight calculation:
+        // - Step 1 (i=1): reference = image[0] (brightest source)
+        // - Step 2 (i=2): reference = image[1] (previous dark image)
+        // - Step 3 (i=3): reference = image[2] (previous dark image)
+        let reference_img = if i == 1 {
+            &linear_images[0]  // First step: use brightest source
+        } else {
+            &linear_images[i - 1]  // Subsequent steps: use previous dark image
+        };
+
         // Merge current result with next darker image
-        let merged = merge_pair(&current, next, current_ev, next_ev, debug_path, &debug_prefix, log);
+        let merged = merge_pair(&current, next, reference_img, current_ev, next_ev, debug_path, &debug_prefix, log);
 
         // Update current to merged result
         // The merged image has an effective EV closer to the brighter image
