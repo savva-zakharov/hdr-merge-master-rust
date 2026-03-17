@@ -1,4 +1,4 @@
-//! Blender HDR merging module
+    //! Blender HDR merging module
 //!
 //! Handles merging bracketed images into HDR using Blender's HDR Merge addon
 

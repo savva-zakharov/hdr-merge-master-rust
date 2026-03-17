@@ -1,11 +1,27 @@
 [package]
 name = "hdr-merge-master"
 version = "1.0.0"
-description = "HDR Merge Master - Desktop Application"
+description = "HDR Merge Master - Desktop Application for merging bracketed HDR images"
 authors = ["Savva Zakahrov"]
 license = "GPLv3-or-later"
 edition = "2024"
 default-run = "hdr-merge-master"
+repository = "https://github.com/hdr-merge-master/hdr-merge-master"
+homepage = "https://github.com/hdr-merge-master/hdr-merge-master"
+keywords = ["hdr", "image-processing", "photography", "merge", "blender"]
+categories = ["multimedia::images", "multimedia::video", "graphics"]
+
+# Exclude large files from package
+exclude = [
+    "target/**",
+    "release/**",
+    "*.zip",
+    "*.log",
+]
+
+[profile.release]
+opt-level = 3
+lto = true
 
 [build-dependencies]
 winres = "0.1"
