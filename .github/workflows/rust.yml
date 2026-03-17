@@ -66,6 +66,7 @@ jobs:
           openssl-devel \
           pkg-config \
           gcc \
+          cargo \
           make
     
     - name: Build

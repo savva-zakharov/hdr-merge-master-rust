@@ -893,44 +893,44 @@ impl HdrMergeApp {
         content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Profile Selection Section ==========
-        let profile_label = text("PP3 Profile:").size(14.0 * self.uiscale);
+        // let profile_label = text("PP3 Profile:").size(14.0 * self.uiscale);
+        //
+        // let selected_profile = self
+        //     .selected_index
+        //     .and_then(|i| self.batch_folders.get(i))
+        //     .map(|f| f.profile.clone())
+        //     .unwrap_or_else(|| "Select...".to_string());
+        //
+        // let profile_picklist = pick_list(
+        //     &self.profiles[..],
+        //     Some(selected_profile),
+        //     Message::SelectProfile,
+        // ).placeholder("Select...");
 
-        let selected_profile = self
-            .selected_index
-            .and_then(|i| self.batch_folders.get(i))
-            .map(|f| f.profile.clone())
-            .unwrap_or_else(|| "Select...".to_string());
-
-        let profile_picklist = pick_list(
-            &self.profiles[..],
-            Some(selected_profile),
-            Message::SelectProfile,
-        ).placeholder("Select...");
-
-        let align_text = if self.gui_settings.use_opencv_align {
-            "Align (OpenCV)"
-        } else {
-            "Align (Hugin)"
-        };
-        let align_checkbox = checkbox(self.gui_settings.do_align)
-            .label(align_text)
-            .on_toggle(Message::ToggleAlign);
+        // let align_text = if self.gui_settings.use_opencv_align {
+        //     "Align (OpenCV)"
+        // } else {
+        //     "Align (Hugin)"
+        // };
+        // let align_checkbox = checkbox(self.gui_settings.do_align)
+        //     .label(align_text)
+        //     .on_toggle(Message::ToggleAlign);
 
         let manage_profiles_btn = button(text("Manage Profiles...").size(16.0 * self.uiscale))
             .on_press(Message::OpenProfileManager)
             .style(button::secondary);
 
-        let profile_section = Row::new()
-            .push(profile_label)
-            .push(profile_picklist)
-            .push(align_checkbox)
-            .push(horizontal_space())
-            .push(manage_profiles_btn)
-            .spacing(10.0 * self.uiscale)
-            .align_y(Alignment::Center);
-        content = content.push(profile_section);
+        // let profile_section = Row::new()
+        //     // .push(profile_label)
+        //     // .push(profile_picklist)
+        //     // .push(align_checkbox)
+        //     .push(horizontal_space())
+        //     .push(manage_profiles_btn)
+        //     .spacing(10.0 * self.uiscale)
+        //     .align_y(Alignment::Center);
+        // content = content.push(profile_section);
 
-        content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
+        // content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
         // ========== Options Section ==========
         // let threads_label = text("Threads:").size(14.0 * self.uiscale);
@@ -950,6 +950,7 @@ impl HdrMergeApp {
             // .push(threads_input)
             // .push(cleanup_checkbox)
             .push(horizontal_space())
+            .push(manage_profiles_btn)
             .push(create_hdrs_btn)
             .push(setup_btn)
             .spacing(10.0 * self.uiscale)
@@ -958,14 +959,17 @@ impl HdrMergeApp {
 
 
         // ========== Progress Bar Section ==========
-        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(2.0 * self.uiscale);
-        let status_text = text(&self.status_message).size(16.0 * self.uiscale);
+        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(16.0 * self.uiscale);
         let progress_section = Row::new()
             .push(progress_bar_widget)
-            .push(status_text)
             .spacing(10.0 * self.uiscale)
             .align_y(Alignment::Center);
         content = content.push(progress_section);
+
+        let status_text = text(&self.status_message).size(16.0 * self.uiscale);
+        let status_row = Row::new()
+            .push(status_text);
+        content = content.push(status_row);
 
         // Build the main content
         let main_content = container(content).width(Length::Fill).height(Length::Fill);

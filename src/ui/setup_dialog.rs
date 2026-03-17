@@ -775,7 +775,7 @@ impl SetupDialog {
 
         // Align Image Stack
         let align_row = Row::new()
-            .push(text("Align Image Stack (Optional):").size(16.0 * uiscale).width(Length::Fixed(250.0 * uiscale)))
+            .push(text("Align Image Stack (Optional):").size(16.0 * uiscale).width(Length::Fixed(200.0 * uiscale)))
             .push(
                 text_input("Path", &self.align_image_stack_exe)
                     .on_input(DialogMessage::AlignImageStackPathChanged)
