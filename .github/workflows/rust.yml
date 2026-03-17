@@ -24,6 +24,7 @@ jobs:
           llvm-dev \
           libclang-dev \
           clang \
+          libopencv-dev \
           libgtk-3-dev \
           libxcb-render0-dev \
           libxcb-shape0-dev \
@@ -32,22 +33,6 @@ jobs:
           libssl-dev \
           pkg-config \
           libssl-dev
-
-    - name: Install OpenCV 4.8 (consistent version)
-      run: |
-        # Download and install OpenCV 4.8.1 for consistent builds
-        wget -O opencv.zip https://github.com/opencv/opencv/archive/refs/tags/4.8.1.zip
-        unzip opencv.zip
-        cd opencv-4.8.1 && mkdir build && cd build
-        cmake -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr/local \
-              -DBUILD_SHARED_LIBS=ON \
-              -DOPENCV_GENERATE_PKGCONFIG=ON \
-              ..
-        make -j$(nproc)
-        sudo make install
-        sudo ldconfig
-        echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> $GITHUB_ENV
     
     - name: Build
       run: cargo build --verbose
@@ -74,6 +59,7 @@ jobs:
           llvm-devel \
           clang-devel \
           clang \
+          opencv-devel \
           gtk3-devel \
           libxcb-devel \
           libxkbcommon-devel \
@@ -81,26 +67,7 @@ jobs:
           pkg-config \
           gcc \
           cargo \
-          make \
-          wget \
-          unzip \
-          cmake
-
-    - name: Install OpenCV 4.8 (consistent version)
-      run: |
-        # Download and install OpenCV 4.8.1 for consistent builds
-        wget -O opencv.zip https://github.com/opencv/opencv/archive/refs/tags/4.8.1.zip
-        unzip opencv.zip
-        cd opencv-4.8.1 && mkdir build && cd build
-        cmake -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr/local \
-              -DBUILD_SHARED_LIBS=ON \
-              -DOPENCV_GENERATE_PKGCONFIG=ON \
-              ..
-        make -j$(nproc)
-        sudo make install
-        sudo ldconfig
-        echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+          make
     
     - name: Build
       run: cargo build --verbose
