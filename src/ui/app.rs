@@ -1,6 +1,6 @@
 //! Main application UI and state management
 
-use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, Column, Row, space, row};
+use iced::widget::{button, checkbox, container, pick_list, progress_bar, rule, scrollable, text, Column, Row, space, row, Container};
 use iced::Length::Fill;
 use iced::{keyboard, Alignment, Element, Length, Subscription, Task, Theme};
 use std::path::Path;
@@ -22,6 +22,9 @@ pub struct HdrMergeApp {
     gui_settings: GuiSettings,
     profiles: Vec<String>,
     progress: f32,
+    progress_stage: String,
+    progress_message: String,
+    is_processing: bool,
     status_message: String,
     config: Config,
     uiscale: f32,
@@ -80,6 +83,9 @@ pub enum Message {
     PreviousTheme,
     NextTheme,
     ClearTheme,
+
+    // Async processing
+    ProcessingComplete(Result<String, String>),
 }
 
 impl Default for HdrMergeApp {
@@ -95,6 +101,9 @@ impl Default for HdrMergeApp {
                 "Night".to_string(),
             ],
             progress: 0.0,
+            progress_stage: String::new(),
+            progress_message: String::new(),
+            is_processing: false,
             status_message: String::new(),
             config: Config {
                 _needs_setup: false,
@@ -313,43 +322,51 @@ impl HdrMergeApp {
         }
     }
 
-    fn execute(&mut self) {
+    fn execute(&mut self) -> Task<Message> {
         if self.batch_folders.is_empty() {
             self.status_message = "Please add folders first".to_string();
-            return;
+            return Task::none();
         }
 
-        let total_folders = self.batch_folders.len();
-        let mut processed = 0;
-        let mut errors = Vec::new();
+        if self.is_processing {
+            self.status_message = "Processing already in progress".to_string();
+            return Task::none();
+        }
 
-        for (_idx, folder) in self.batch_folders.iter().enumerate() {
-            match process::process_folder(folder, &self.config, &self.gui_settings) {
-                Ok(msg) => {
-                    self.status_message = msg;
-                    processed += 1;
+        // Set processing state
+        self.is_processing = true;
+        self.progress = 0.0;
+        self.progress_stage = "Processing...".to_string();
+        self.progress_message = "Starting batch processing".to_string();
+
+        // Clone data for async task
+        let folders = self.batch_folders.clone();
+        let config = self.config.clone();
+        let gui_settings = self.gui_settings.clone();
+
+        // Spawn async processing task
+        Task::perform(
+            async move {
+                // Process folders in background
+                let _total = folders.len() as f32;
+                let mut processed = 0f32;
+                let mut errors = Vec::new();
+                
+                for folder in folders {
+                    match process::process_folder(&folder, &config, &gui_settings) {
+                        Ok(_) => processed += 1.0,
+                        Err(err) => errors.push(format!("{}: {}", folder.path, err)),
+                    }
                 }
-                Err(err) => {
-                    errors.push(format!("{}: {}", folder.path, err));
+                
+                if errors.is_empty() {
+                    Ok(format!("Successfully processed {} folders", processed as i32))
+                } else {
+                    Err(format!("Completed with errors: {}", errors.join("; ")))
                 }
-            }
-
-            // Update progress
-            self.progress = (processed as f32) / (total_folders as f32);
-        }
-
-        // Final status message
-        if errors.is_empty() {
-            self.status_message = format!("Successfully processed {} folders", processed);
-            self.progress = 1.0;
-        } else {
-            self.status_message = format!(
-                "Completed with errors: {} of {} folders processed. Errors: {}",
-                processed,
-                total_folders,
-                errors.join("; ")
-            );
-        }
+            },
+            Message::ProcessingComplete,
+        )
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -385,7 +402,19 @@ impl HdrMergeApp {
                 self.handle_batch_import(path);
             }
             Message::Execute => {
-                self.execute();
+                return self.execute();
+            }
+            Message::ProcessingComplete(result) => {
+                self.is_processing = false;
+                match result {
+                    Ok(msg) => {
+                        self.status_message = msg;
+                        self.progress = 1.0;
+                    }
+                    Err(err) => {
+                        self.status_message = err;
+                    }
+                }
             }
             Message::SelectFolder(index) => {
                 self.selected_index = Some(index);
@@ -773,7 +802,7 @@ impl HdrMergeApp {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let mut content = Column::new().spacing(8.0 * self.uiscale).padding(10.0 * self.uiscale);
+        let mut content = Column::new().spacing(8.0 * self.uiscale).padding(6.0 * self.uiscale);
 
         // ========== Batch Folders Section ==========
         let folders_label = text("Input Folders:").size(14.0 * self.uiscale);
@@ -789,8 +818,8 @@ impl HdrMergeApp {
             .push(text("Align").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("Brackets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("Sets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
-            .spacing(10.0 * self.uiscale)
-            .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+            .spacing(6.0 * self.uiscale)
+            .padding([4.0 * self.uiscale, 6.0 * self.uiscale]);
         folder_rows = folder_rows.push(header);
 
         // Folder rows
@@ -819,8 +848,8 @@ impl HdrMergeApp {
                 .push(container(checkbox(folder.align).on_toggle(move |value| Message::ToggleFolderAlign(i, value))).width(50.0 * self.uiscale))
                 .push(text(folder.brackets.to_string()).width(50.0 * self.uiscale).size(12.0 * self.uiscale))
                 .push(text(format!("{} files", folder.files.len())).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
-                .spacing(10.0 * self.uiscale)
-                .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
+                .spacing(6.0 * self.uiscale)
+                .padding([4.0 * self.uiscale, 6.0 * self.uiscale]);
             folder_rows= folder_rows.push(horizontal_rule(2));
             folder_rows = folder_rows.push(folder_row);
         }
@@ -829,9 +858,9 @@ impl HdrMergeApp {
             ;
 
         let buttons = Column::new()
-            .spacing(10.0 * self.uiscale)
+            .spacing(6.0 * self.uiscale)
             .width(120.0 * self.uiscale)
-            .padding(10.0 * self.uiscale)
+            .padding(6.0 * self.uiscale)
             .push(button(text("Add").size(16.0 * self.uiscale)).on_press(Message::AddFolder).style(button::success).width(100.0 * self.uiscale))
             .push(button(text("Remove").size(16.0 * self.uiscale)).on_press(Message::RemoveSelected).style(button::warning).width(100.0 * self.uiscale))
             .push(button(text("Clear All").size(16.0 * self.uiscale)).on_press(Message::ClearAll).style(button::danger).width(100.0 * self.uiscale))
@@ -846,49 +875,11 @@ impl HdrMergeApp {
             row!(
                 folder_scroll,
                 buttons
-            ).spacing(10.0 * self.uiscale);
+            ).spacing(6.0 * self.uiscale);
 
 
         content = content.push(Column::new().push(folders_label).push(folders_section).spacing(8.0 * self.uiscale));
 
-        // Show files for selected folder
-        if let Some(index) = self.selected_index {
-            if let Some(folder) = self.batch_folders.get(index) {
-                content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
-                let files_label = text(format!(
-                    "Files in: {} ({} files, {} brackets, {} sets)",
-                    folder.path,
-                    folder.files.len(),
-                    folder.brackets,
-                    folder.sets
-                )).size(14.0 * self.uiscale);
-
-                let mut file_rows = Column::new().spacing(4.0 * self.uiscale);
-                let file_header = Row::new()
-                    .push(text("File Path").width(Length::Fill))
-                    .push(text("EXIF Info").width(Length::Fill))
-                    .spacing(10.0 * self.uiscale)
-                    .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
-                file_rows = file_rows.push(file_header);
-
-                for file in &folder.files {
-                    let exif_info = Self::format_exif_info(file);
-                    let file_row = Row::new()
-                        .push(text(&file.path).width(Length::Fill))
-                        .push(text(if exif_info.is_empty() {
-                            "No EXIF".to_string()
-                        } else {
-                            exif_info
-                        }).width(Length::Fill))
-                        .spacing(10.0 * self.uiscale)
-                        .padding([4.0 * self.uiscale, 10.0 * self.uiscale]);
-                    file_rows = file_rows.push(file_row);
-                }
-
-                let file_scroll = scrollable(file_rows).height(Length::Fixed(150.0 * self.uiscale));
-                content = content.push(Column::new().push(files_label).push(file_scroll).spacing(4.0 * self.uiscale));
-            }
-        }
 
         content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
 
@@ -926,7 +917,7 @@ impl HdrMergeApp {
         //     // .push(align_checkbox)
         //     .push(horizontal_space())
         //     .push(manage_profiles_btn)
-        //     .spacing(10.0 * self.uiscale)
+        //     .spacing(6.0 * self.uiscale)
         //     .align_y(Alignment::Center);
         // content = content.push(profile_section);
 
@@ -942,7 +933,13 @@ impl HdrMergeApp {
         //     .label("Cleanup temporary files")
         //     .on_toggle(Message::ToggleCleanup);
 
-        let create_hdrs_btn = button(text("Create HDRs").size(16.0 * self.uiscale)).on_press(Message::Execute);
+        let create_hdrs_btn = if self.is_processing {
+            button(text("Processing...").size(16.0 * self.uiscale))
+                .style(button::secondary)
+        } else {
+            button(text("Create HDRs").size(16.0 * self.uiscale))
+                .on_press(Message::Execute)
+        };
         let setup_btn = button(text("Setup").size(16.0 * self.uiscale)).on_press(Message::OpenSetup).style(button::secondary);
 
         let options_section = Row::new()
@@ -951,25 +948,86 @@ impl HdrMergeApp {
             // .push(cleanup_checkbox)
             .push(horizontal_space())
             .push(manage_profiles_btn)
-            .push(create_hdrs_btn)
             .push(setup_btn)
-            .spacing(10.0 * self.uiscale)
+            .push(create_hdrs_btn)
+            .spacing(6.0 * self.uiscale)
             .align_y(Alignment::Center);
         content = content.push(options_section);
 
 
         // ========== Progress Bar Section ==========
-        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(16.0 * self.uiscale);
-        let progress_section = Row::new()
+        // Show progress bar and status
+        let progress_bar_widget = container(progress_bar(0.0..=1.0, self.progress)).height(20.0 * self.uiscale);
+        
+        let progress_label = if self.is_processing {
+            text(format!("{} - {}", self.progress_stage, self.progress_message)).size(12.0 * self.uiscale)
+        } else {
+            text(format!("Progress: {:.0}%", self.progress * 100.0)).size(12.0 * self.uiscale)
+        };
+        
+        let progress_section = Column::new()
+            .push(progress_label)
             .push(progress_bar_widget)
-            .spacing(10.0 * self.uiscale)
-            .align_y(Alignment::Center);
+            .spacing(5.0 * self.uiscale);
+        
         content = content.push(progress_section);
 
         let status_text = text(&self.status_message).size(16.0 * self.uiscale);
         let status_row = Row::new()
             .push(status_text);
         content = content.push(status_row);
+
+
+        // Show files for selected folder
+        if let Some(index) = self.selected_index {
+            if let Some(folder) = self.batch_folders.get(index) {
+                content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
+                let files_label = text(format!(
+                    "Files in: {} ({} files, {} brackets, {} sets)",
+                    folder.path,
+                    folder.files.len(),
+                    folder.brackets,
+                    folder.sets
+                )).size(12.0 * self.uiscale).width(Length::Fill);
+
+                let file_column_width = 75.0;
+
+                let mut file_rows = Column::new().spacing(4.0 * self.uiscale);
+                let file_header = Row::new()
+                    .push(files_label)
+                    .push(text("Compensation").size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                    .push(text("Exposure").size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                    .push(text("F-stop").size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                    .push(text("ISO").size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                    .spacing(6.0 * self.uiscale)
+                    .padding([4.0 * self.uiscale, 6.0 * self.uiscale]);
+                file_rows = file_rows.push(file_header);
+                file_rows = file_rows.push(horizontal_rule((2.0 * self.uiscale) as u16));
+
+                for file in &folder.files {
+                    let _exif_info = Self::format_exif_info(file);
+
+                    // Use if-let to safely borrow Option fields without moving
+                    let bias = file.bias.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let exp = file.exposure_time.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let fnum = file.f_number.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let iso = file.iso.as_ref().map(|s| s.as_str()).unwrap_or("");
+
+                    let file_row = Row::new()
+                        .push(text(&file.path).size(12.0 * self.uiscale).width(Length::Fill))
+                        .push(text(bias).size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                        .push(text(exp).size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                        .push(text(fnum).size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                        .push(text(iso).size(12.0 * self.uiscale).width(file_column_width * self.uiscale))
+                        .spacing(6.0 * self.uiscale);
+                    file_rows = file_rows.push(file_row);
+                }
+
+                let file_scroll = scrollable(file_rows).height(Length::Fill);
+                let file_container = Container::new(file_scroll).style(container::bordered_box).padding(4.0 * self.uiscale);
+                content = content.push(Column::new().push(file_container).spacing(4.0 * self.uiscale));
+            }
+        }
 
         // Build the main content
         let main_content = container(content).width(Length::Fill).height(Length::Fill);

@@ -74,6 +74,7 @@ pub fn merge_with_blender_concurrent(
             exposure_time: None,
             f_number: None,
             iso: None,
+            bias: None,
         };
         get_resolution_from_file(&temp_file)
     } else {

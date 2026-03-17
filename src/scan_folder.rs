@@ -16,6 +16,7 @@ pub struct ScannedFile {
     pub exposure_time: Option<String>,
     pub f_number: Option<String>,
     pub iso: Option<String>,
+    pub bias: Option<String>,
 }
 
 /// Result of scanning a folder
@@ -57,11 +58,27 @@ fn read_exif_data(path: &Path) -> Option<ScannedFile> {
                 .get_field(Tag::PhotographicSensitivity, In::PRIMARY)
                 .map(|f| f.display_value().to_string());
 
+            let bias_raw = exif
+                .get_field(Tag::ExposureBiasValue, In::PRIMARY)
+                .map(|f| f.display_value().to_string());
+
+            // Add '+' prefix to positive bias values for consistent display
+            let bias = bias_raw.map(|b| {
+                let trimmed = b.trim();
+                // Check if it's a positive number without a sign
+                if trimmed.starts_with('-') || trimmed.starts_with('+') {
+                    b // Already has a sign
+                } else {
+                    format!("+{}", b) // Add '+' prefix
+                }
+            });
+
             Some(ScannedFile {
                 path: path.to_string_lossy().to_string(),
                 exposure_time,
                 f_number,
                 iso,
+                bias,
             })
         }
         Err(_) => Some(ScannedFile {
@@ -69,6 +86,7 @@ fn read_exif_data(path: &Path) -> Option<ScannedFile> {
             exposure_time: None,
             f_number: None,
             iso: None,
+            bias: None,
         }),
     }
 }
@@ -224,36 +242,42 @@ mod tests {
                 exposure_time: Some("1/100".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
             ScannedFile {
                 path: "img002.dng".to_string(),
                 exposure_time: Some("1/50".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
             ScannedFile {
                 path: "img003.dng".to_string(),
                 exposure_time: Some("1/25".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
             ScannedFile {
                 path: "img004.dng".to_string(),
                 exposure_time: Some("1/100".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
             ScannedFile {
                 path: "img005.dng".to_string(),
                 exposure_time: Some("1/50".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
             ScannedFile {
                 path: "img006.dng".to_string(),
                 exposure_time: Some("1/25".to_string()),
                 f_number: Some("f/8".to_string()),
                 iso: Some("100".to_string()),
+                bias: Some("0".to_string()),
             },
         ];
 

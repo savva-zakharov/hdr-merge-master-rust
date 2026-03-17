@@ -13,8 +13,301 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
+use tokio::sync::mpsc;
 
 use crate::config::{Config, FolderEntry, GuiSettings};
+
+/// Progress update message for async processing
+#[derive(Debug, Clone)]
+pub struct ProgressUpdate {
+    pub stage: String,
+    pub current: u32,
+    pub total: u32,
+    pub message: String,
+}
+
+/// Process all folders in the batch (async version with progress reporting)
+///
+/// # Arguments
+/// * `folders` - List of folder entries to process
+/// * `config` - Application configuration
+/// * `gui_settings` - GUI settings
+/// * `progress_tx` - Channel sender for progress updates
+///
+/// # Returns
+/// Result indicating success or error message
+pub async fn process_folder_async(
+    folders: Vec<FolderEntry>,
+    config: Config,
+    gui_settings: GuiSettings,
+    progress_tx: mpsc::UnboundedSender<ProgressUpdate>,
+) -> Result<String, String> {
+    let total_folders = folders.len() as u32;
+    let mut processed = 0u32;
+    let mut errors = Vec::new();
+
+    for (folder_idx, folder) in folders.iter().enumerate() {
+        let stage_msg = format!("Processing folder {}/{}", folder_idx + 1, total_folders);
+        let _ = progress_tx.send(ProgressUpdate {
+            stage: "Overall".to_string(),
+            current: processed,
+            total: total_folders,
+            message: stage_msg.clone(),
+        });
+
+        match process_single_folder_async(&folder, &config, &gui_settings, &progress_tx).await {
+            Ok(msg) => {
+                processed += 1;
+                let _ = progress_tx.send(ProgressUpdate {
+                    stage: "Overall".to_string(),
+                    current: processed,
+                    total: total_folders,
+                    message: msg,
+                });
+            }
+            Err(err) => {
+                errors.push(format!("{}: {}", folder.path, err));
+                let _ = progress_tx.send(ProgressUpdate {
+                    stage: "Error".to_string(),
+                    current: processed,
+                    total: total_folders,
+                    message: format!("Error: {}", err),
+                });
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        let _ = progress_tx.send(ProgressUpdate {
+            stage: "Complete".to_string(),
+            current: total_folders,
+            total: total_folders,
+            message: format!("Successfully processed {} folders", processed),
+        });
+        Ok(format!("Successfully processed {} folders", processed))
+    } else {
+        let _ = progress_tx.send(ProgressUpdate {
+            stage: "Complete".to_string(),
+            current: processed,
+            total: total_folders,
+            message: format!("Completed with errors: {}", errors.join("; ")),
+        });
+        Err(format!(
+            "Completed with errors: {} of {} folders processed. Errors: {}",
+            processed, total_folders, errors.join("; ")
+        ))
+    }
+}
+
+/// Process a single folder with progress reporting
+async fn process_single_folder_async(
+    folder: &FolderEntry,
+    config: &Config,
+    gui_settings: &GuiSettings,
+    progress_tx: &mpsc::UnboundedSender<ProgressUpdate>,
+) -> Result<String, String> {
+    let folder_path = Path::new(&folder.path);
+
+    if !folder_path.exists() {
+        return Err(format!("Folder does not exist: {}", folder.path));
+    }
+
+    if folder.files.is_empty() {
+        return Err(format!("No files to process in: {}", folder.path));
+    }
+
+    let profile = config
+        .pp3_profiles
+        .iter()
+        .find(|p| p.name == folder.profile);
+    let profile_path = profile.map(|p| p.file_path.clone());
+
+    let merged_dir = folder_path.join("Merged");
+    std::fs::create_dir_all(&merged_dir)
+        .map_err(|e| format!("Failed to create merged directory: {}", e))?;
+
+    let logs_dir = merged_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir)
+        .map_err(|e| format!("Failed to create logs directory: {}", e))?;
+
+    let total_stages = 5u32; // Total processing stages
+    let mut current_stage = 0u32;
+
+    // Stage 1: RAW processing (if needed)
+    current_stage += 1;
+    let _ = progress_tx.send(ProgressUpdate {
+        stage: format!("Stage {}/{}", current_stage, total_stages),
+        current: 0,
+        total: 1,
+        message: "Processing RAW files...".to_string(),
+    });
+
+    let tif_folder = merged_dir.join("tif");
+    let source_files = if folder.is_raw {
+        process_raw_files(
+            &folder.files,
+            &tif_folder,
+            &profile_path,
+            &config.exe_paths.rawtherapee_cli_exe,
+            &logs_dir,
+        )?
+    } else {
+        folder
+            .files
+            .iter()
+            .map(|f| PathBuf::from(&f.path))
+            .collect()
+    };
+
+    // Stage 2: Alignment
+    current_stage += 1;
+    let _ = progress_tx.send(ProgressUpdate {
+        stage: format!("Stage {}/{}", current_stage, total_stages),
+        current: 0,
+        total: 1,
+        message: "Aligning images...".to_string(),
+    });
+
+    let aligned_files = if gui_settings.do_align {
+        let align_folder = merged_dir.join("aligned");
+        let empty_exe = String::new();
+        align_images_by_set_concurrent(
+            &source_files,
+            &align_folder,
+            gui_settings.use_opencv_align,
+            if gui_settings.use_opencv_align {
+                &empty_exe
+            } else {
+                &config.exe_paths.align_image_stack_exe
+            },
+            folder,
+            &logs_dir,
+            gui_settings.threads as usize,
+        )?
+    } else {
+        source_files.clone()
+    };
+
+    // Stage 3: HDR Merge
+    current_stage += 1;
+    let _ = progress_tx.send(ProgressUpdate {
+        stage: format!("Stage {}/{}", current_stage, total_stages),
+        current: 0,
+        total: 1,
+        message: "Merging HDR images...".to_string(),
+    });
+
+    let exr_folder = merged_dir.join("exr");
+    let ev_source_files = folder.files.clone();
+
+    if gui_settings.use_opencv_debevec {
+        crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &ev_source_files,
+            folder,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+        )?;
+    } else if gui_settings.use_opencv_merge_robertson {
+        crate::process::opencv_merge::merge_with_opencv_robertson_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &ev_source_files,
+            folder,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+        )?;
+    } else if gui_settings.use_rust_merge {
+        let debug_export_dir;
+        let debug_export_path = if gui_settings.rust_merge_debug_export {
+            debug_export_dir = merged_dir.join("debug_rust_merge");
+            std::fs::create_dir_all(&debug_export_dir).ok();
+            Some(debug_export_dir.as_path())
+        } else {
+            None
+        };
+
+        crate::process::rust_merge::merge_with_rust_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &ev_source_files,
+            folder,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+            debug_export_path,
+        )?;
+    } else {
+        crate::process::external_blender::merge_with_blender_concurrent(
+            &aligned_files,
+            &exr_folder,
+            &folder.files,
+            &ev_source_files,
+            folder,
+            &config.exe_paths.blender_exe,
+            &logs_dir,
+            folder.sets,
+            gui_settings.threads as usize,
+        )?;
+    }
+
+    // Wait for file handles to be released
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Stage 4: Tone mapping
+    current_stage += 1;
+    let _ = progress_tx.send(ProgressUpdate {
+        stage: format!("Stage {}/{}", current_stage, total_stages),
+        current: 0,
+        total: 1,
+        message: "Tone mapping to JPG...".to_string(),
+    });
+
+    let jpg_folder = merged_dir.join("jpg");
+    let hdr_folder = if gui_settings.use_opencv_debevec
+        || gui_settings.use_opencv_merge_robertson
+    {
+        exr_folder.clone()
+    } else {
+        exr_folder.clone()
+    };
+
+    if gui_settings.use_opencv_tonemap {
+        tone_map_with_opencv(
+            &hdr_folder,
+            &jpg_folder,
+            gui_settings,
+            &logs_dir,
+            gui_settings.threads as usize,
+        )?;
+    } else {
+        crate::process::external_luminance::tone_map_exr_to_jpg_concurrent(
+            &exr_folder,
+            &jpg_folder,
+            &config.exe_paths.luminance_cli_exe,
+            &logs_dir,
+            gui_settings.threads as usize,
+        )?;
+    }
+
+    // Stage 5: Cleanup
+    current_stage += 1;
+    let _ = progress_tx.send(ProgressUpdate {
+        stage: format!("Stage {}/{}", current_stage, total_stages),
+        current: 1,
+        total: 1,
+        message: "Cleaning up...".to_string(),
+    });
+
+    if gui_settings.do_cleanup {
+        cleanup_temp_files(&merged_dir, gui_settings.do_align)?;
+    }
+
+    Ok(format!("Successfully processed: {}", folder.path))
+}
 
 /// Process all folders in the batch
 ///
@@ -566,6 +859,7 @@ fn reload_aligned_files(align_dir: &Path) -> Result<Vec<crate::scan_folder::Scan
                             exposure_time: None,
                             f_number: None,
                             iso: None,
+                            bias: None,
                         });
                     }
                 }

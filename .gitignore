@@ -42,3 +42,6 @@ temp/
 
 # Config files
 config.json
+
+# Release files
+/release/
