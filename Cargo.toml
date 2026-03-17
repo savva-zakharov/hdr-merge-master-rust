@@ -33,8 +33,5 @@ clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
 # EXR file format support (pure Rust)
 exr = "1.7"
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-iced_aw = "0.13.1"
 # Open URL in browser
 open = "5.3"

@@ -291,7 +291,7 @@ fn overexposure_weight(pixel: [f32; 3], _threshold: f32) -> f32 {
     // Step 4: Multiply by 0.57735 (approximately 1/sqrt(3))
     // let scaled1 = dot1 * 0.57735;
     
-    // Step 5: Map result from 0.75-1.0 range to 0.0-1.0 range
+    // Step 5: Map result from 0.x-1.0 (_threshold) range to 0.0-1.0 range
     let weight = 1.0 - ((gamma_adjusted - _threshold) / _threshold).clamp(0.0, 1.0);
     
     weight
