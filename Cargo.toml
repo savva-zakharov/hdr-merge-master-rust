@@ -40,8 +40,7 @@ chrono = "0.4"
 # Image processing
 image = "0.25"
 # OpenCV with photo module for AlignMTB
-# Use dynamic linking (default) with explicit runtime linking
-opencv = { version = "0.97.2", features = ["photo", "opencv-4"] }
+opencv = { version = "0.97.2", features = ["photo"] }
 # Parallel processing
 rayon = "1.11"
 # CLI argument parsing
