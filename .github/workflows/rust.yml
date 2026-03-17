@@ -105,17 +105,17 @@ jobs:
     - name: Build
       run: cargo build --verbose
       env:
-        LLVM_CONFIG_PATH: "C:\Program Files\LLVM\bin\llvm-config.exe"
+        LLVM_CONFIG_PATH: 'C:\Program Files\LLVM\bin\llvm-config.exe'
     
     - name: Run tests
       run: cargo test --verbose
       env:
-        LLVM_CONFIG_PATH: "C:\Program Files\LLVM\bin\llvm-config.exe"
+        LLVM_CONFIG_PATH: 'C:\Program Files\LLVM\bin\llvm-config.exe'
     
     - name: Build release
       run: cargo build --release --verbose
       env:
-        LLVM_CONFIG_PATH: "C:\Program Files\LLVM\bin\llvm-config.exe"
+        LLVM_CONFIG_PATH: 'C:\Program Files\LLVM\bin\llvm-config.exe'
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
