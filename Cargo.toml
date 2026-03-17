@@ -7,6 +7,9 @@ license = "GPLv3-or-later"
 edition = "2024"
 default-run = "hdr-merge-master"
 
+[build-dependencies]
+winres = "0.1"
+
 [dependencies]
 # GUI framework
 iced = { version = "0.14.0", features = ["tokio"] }

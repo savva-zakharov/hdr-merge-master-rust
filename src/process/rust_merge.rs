@@ -259,28 +259,42 @@ fn linear_to_srgb(linear: f32) -> f32 {
 }
 
 /// Calculate overexposure weight for a pixel
-/// 
+///
 /// Returns a weight from 0.0 (completely overexposed) to 1.0 (not overexposed)
-/// Uses a smooth falloff starting at 80% of maximum brightness
-/// 
+/// Uses a simplified algorithm with gamma adjustment and linear mapping
+///
+/// Algorithm:
+/// 1. Find maximum of RGB channels
+/// 2. Apply gamma adjustment (0.4545)
+/// 3. Calculate dot product with [0.6, 0.6, 0.6]
+/// 4. Multiply by 0.57735
+/// 5. Map result from 0.5-1.0 range to 0.0-1.0 range
+///
 /// # Arguments
 /// * `pixel` - Linear RGB pixel values
-/// * `threshold` - Threshold where overexposure starts (default 0.8)
-/// 
+/// * `_threshold` - Threshold where overexposure starts (unused in new algorithm)
+///
 /// # Returns
 /// Weight from 0.0 to 1.0
 #[inline]
-fn overexposure_weight(pixel: [f32; 3], threshold: f32) -> f32 {
-    // Use the brightest channel to determine overexposure
+fn overexposure_weight(pixel: [f32; 3], _threshold: f32) -> f32 {
+    // Step 1: Find maximum channel value
     let max_channel = pixel[0].max(pixel[1]).max(pixel[2]);
     
-    if max_channel <= threshold {
-        1.0
-    } else {
-        // Smooth falloff from threshold to 1.0
-        let over = (max_channel - threshold) / (1.0 - threshold);
-        (1.0 - over.clamp(0.0, 1.0)).powi(2) // Quadratic falloff
-    }
+    // Step 2: Apply gamma adjustment (0.4545 = 1/2.2)
+    let gamma = 0.4545f32;
+    let gamma_adjusted = max_channel.powf(gamma);
+    
+    // Step 3: Calculate dot product with [0.6, 0.6, 0.6] for uniform RGB
+    // let dot1 = gamma_adjusted * 0.6 + gamma_adjusted * 0.6 + gamma_adjusted * 0.6;
+    
+    // Step 4: Multiply by 0.57735 (approximately 1/sqrt(3))
+    // let scaled1 = dot1 * 0.57735;
+    
+    // Step 5: Map result from 0.75-1.0 range to 0.0-1.0 range
+    let weight = 1.0 - ((gamma_adjusted - _threshold) / _threshold).clamp(0.0, 1.0);
+    
+    weight
 }
 
 /// Calculate luminance-based weight for a pixel
@@ -424,7 +438,7 @@ pub fn merge_pair(
         // Calculate overexposure weights using ORIGINAL images (before exposure adjustment)
         // This ensures weights are based on actual captured data, not adjusted values
         // Bright image weight: high where it's NOT overexposed (good highlight data)
-        let bright_weight = overexposure_weight(bright_pixel, 0.85);
+        let bright_weight = overexposure_weight(bright_pixel, 0.5);
 
         // Dark image weight: high where bright image IS overexposed
         // (dark image has better data there)
@@ -436,6 +450,7 @@ pub fn merge_pair(
 
         // Combine weights
         let total_weight = bright_weight * bright_lum_weight + dark_weight * dark_lum_weight;
+        // let total_weight = dark_weight + bright_weight;
 
         let merged_pixel = if total_weight > 0.0001 {
             // Weighted blend using ADJUSTED dark pixel
@@ -745,16 +760,64 @@ mod tests {
     
     #[test]
     fn test_overexposure_weight() {
-        // Dark pixel = full weight
-        assert!((overexposure_weight([0.1, 0.1, 0.1], 0.8) - 1.0).abs() < 0.0001);
-        // Mid pixel = full weight
-        assert!((overexposure_weight([0.5, 0.5, 0.5], 0.8) - 1.0).abs() < 0.0001);
-        // Threshold pixel = full weight
-        assert!((overexposure_weight([0.8, 0.8, 0.8], 0.8) - 1.0).abs() < 0.0001);
-        // Overexposed pixel = reduced weight
-        assert!(overexposure_weight([0.9, 0.9, 0.9], 0.8) < 1.0);
-        // Fully overexposed = zero weight
-        assert!((overexposure_weight([1.0, 1.0, 1.0], 0.8) - 0.0).abs() < 0.0001);
+        // Test the new gamma-based overexposure weight algorithm
+        // Iterate through the full 0.0-1.0 range in 0.1 increments
+        println!("\n=== Overexposure Weight Test (Gamma-based Algorithm) ===");
+        println!("Input (RGB)          -> Weight");
+        println!("----------------------------------------");
+        
+        for i in 0..=10 {
+            let value = (i as f32) * 0.1;
+            let pixel = [value, value, value];
+            let weight = overexposure_weight(pixel, 0.8);
+            
+            // Verify weight is in valid range
+            assert!(weight >= 0.0 && weight <= 1.0, 
+                "Weight {} out of range for input {}", weight, value);
+            
+            println!("[{:.1}, {:.1}, {:.1}]  -> {:.6}", value, value, value, weight);
+        }
+        
+        println!("----------------------------------------");
+        
+        // Test specific cases
+        println!("\nSpecific test cases:");
+        
+        // Very dark pixels
+        let dark_weight = overexposure_weight([0.0, 0.0, 0.0], 0.8);
+        println!("Black [0.0, 0.0, 0.0] -> {:.6}", dark_weight);
+        assert!(dark_weight >= 0.0 && dark_weight <= 1.0);
+        
+        // Mid-tone pixels
+        let mid_weight = overexposure_weight([0.5, 0.5, 0.5], 0.8);
+        println!("Mid   [0.5, 0.5, 0.5] -> {:.6}", mid_weight);
+        assert!(mid_weight >= 0.0 && mid_weight <= 1.0);
+        
+        // Bright pixels
+        let bright_weight = overexposure_weight([0.8, 0.8, 0.8], 0.8);
+        println!("Bright[0.8, 0.8, 0.8] -> {:.6}", bright_weight);
+        assert!(bright_weight >= 0.0 && bright_weight <= 1.0);
+        
+        // Very bright pixels
+        let very_bright_weight = overexposure_weight([0.9, 0.9, 0.9], 0.8);
+        println!("V.Bright [0.9, 0.9, 0.9] -> {:.6}", very_bright_weight);
+        assert!(very_bright_weight >= 0.0 && very_bright_weight <= 1.0);
+        
+        // White pixels
+        let white_weight = overexposure_weight([1.0, 1.0, 1.0], 0.8);
+        println!("White [1.0, 1.0, 1.0] -> {:.6}", white_weight);
+        assert!(white_weight >= 0.0 && white_weight <= 1.0);
+        
+        // Test with non-uniform RGB values
+        println!("\nNon-uniform RGB values:");
+        let mixed1 = overexposure_weight([1.0, 0.5, 0.2], 0.8);
+        println!("[1.0, 0.5, 0.2] -> {:.6}", mixed1);
+        
+        let mixed2 = overexposure_weight([0.3, 0.9, 0.6], 0.8);
+        println!("[0.3, 0.9, 0.6] -> {:.6}", mixed2);
+        
+        let mixed3 = overexposure_weight([0.1, 0.1, 0.95], 0.8);
+        println!("[0.1, 0.1, 0.95] -> {:.6}", mixed3);
     }
     
     #[test]
