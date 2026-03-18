@@ -83,7 +83,7 @@ pub fn align_set_with_opencv(
             }
             #[cfg(not(any(opencv_4_5, opencv_4_6, opencv_4_7, opencv_4_8, opencv_4_9, opencv_4_x)))]
             {
-                imgproc::cvt_color(&color, &mut color_bgr, imgproc::COLOR_GRAY2BGR, 0)
+                imgproc::cvt_color(&color, &mut color_bgr, imgproc::COLOR_GRAY2BGR, 0,  opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT)
                     .map_err(|e| format!("Failed to convert to BGR: {}", e))?;
             }
             color_images.push(color_bgr);

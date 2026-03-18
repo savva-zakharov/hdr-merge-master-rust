@@ -462,14 +462,8 @@ impl HdrMergeApp {
                     } else {
                         self.status_message = "Configuration saved".to_string();
 
-                        // Update main app state with new config
-                        self.gui_settings.threads = self.config.gui_settings.threads as u32;
-                        self.gui_settings.do_recursive = self.config.gui_settings.do_recursive;
-                        self.gui_settings.do_cleanup = self.config.gui_settings.do_cleanup;
-                        self.gui_settings.do_align = self.config.gui_settings.do_align;
-                        self.gui_settings.use_opencv_align = self.config.gui_settings.use_opencv_align;
-                        self.gui_settings.use_blender_merge = self.config.gui_settings.use_blender_merge;
-                        self.gui_settings.use_opencv_debevec = self.config.gui_settings.use_opencv_debevec;
+                        // Update main app state with all settings from config
+                        self.gui_settings = (&self.config.gui_settings).into();
 
                         // Update profiles from config
                         self.profiles = if self.config.pp3_profiles.is_empty() {
