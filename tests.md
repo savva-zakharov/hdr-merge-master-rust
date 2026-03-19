@@ -16,3 +16,11 @@ test set.json \
 #### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
 37.39s
 
+### Serial refactor (unoptimised)
+
+#### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
+318.47s / 6m 3s - 8 threads \
+
+### Serial refactor (unoptimised)
+
+#### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap

@@ -118,3 +118,62 @@ pub fn tone_map_exr_to_jpg_concurrent(
 
     Ok(())
 }
+
+/// Tone map a single EXR file to JPG using Luminance CLI
+pub fn tone_map_single_file(
+    exr_path: &Path,
+    jpg_path: &Path,
+    luminance_exe: &str,
+    logs_dir: &Path,
+    set_idx: usize,
+) -> Result<(), String> {
+    use std::fs;
+
+    if luminance_exe.is_empty() {
+        return Err("Luminance CLI not configured".to_string());
+    }
+
+    // Create JPG output directory
+    if let Some(parent) = jpg_path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            return Err(format!("Failed to create jpg directory: {}", e));
+        }
+    }
+
+    // Build Luminance CLI command
+    let mut cmd = Command::new(luminance_exe);
+    cmd.arg("-l")
+        .arg(exr_path)
+        .arg("--tmo")
+        .arg("reinhard02")
+        .arg("-q")
+        .arg("98")
+        .arg("-o")
+        .arg(jpg_path);
+
+    // Execute command
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute Luminance CLI: {}", e))?;
+
+    // Save logs
+    let log_file = logs_dir.join(format!("tonemap_set_{:03}.log", set_idx));
+    let mut log_content = String::new();
+    log_content.push_str(&format!("=== Luminance Tone Mapping - Set {} ===\n\n", set_idx));
+    log_content.push_str(&format!("Input: {}\n", exr_path.display()));
+    log_content.push_str(&format!("Output: {}\n", jpg_path.display()));
+    log_content.push_str(&format!("Command: {:?}\n\n", cmd));
+    log_content.push_str("STDOUT:\n");
+    log_content.push_str(&String::from_utf8_lossy(&output.stdout));
+    log_content.push_str("\nSTDERR:\n");
+    log_content.push_str(&String::from_utf8_lossy(&output.stderr));
+    let _ = fs::write(&log_file, &log_content);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Tone mapping failed: {}\n", stderr));
+    }
+
+    println!("    [TONEMAP] Set {}: ✓ Complete", set_idx);
+
+    Ok(())
+}

@@ -2,311 +2,83 @@
 //!
 //! Handles the actual processing of bracketed images into HDR
 //!
-//! Processing Flow:
-//! 1. If RAW files: process with RawTherapee CLI → Merged/tif/
-//! 2. If align enabled: align with align_image_stack → Merged/aligned/ (or OpenCV AlignMTB if enabled)
-//! 3. Merge each bracketed set using Blender HDR_Merge.blend → Merged/exr/ (or OpenCV MergeDebevec/Robertson if enabled)
-//! 4. Tone map EXR to JPG using Luminance CLI → Merged/jpg/ (or OpenCV tonemapping if enabled)
+//! Processing Flow (per bracket set):
+//! 1. If RAW files: process with RawTherapee CLI → memory
+//! 2. If align enabled: align with align_image_stack/OpenCV → memory
+//! 3. Merge bracket set using Blender/OpenCV/Rust → memory
+//! 4. Tone map to JPG → save to disk (in parallel with next bracket)
 //!
 //! All steps log output to Merged/logs/
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc::{self, Sender, Receiver};
 use std::time::Instant;
-use tokio::sync::mpsc;
 
 use crate::config::{Config, FolderEntry, GuiSettings};
 
-/// Progress update message for async processing
+/// Message for disk I/O operations
 #[derive(Debug, Clone)]
-pub struct ProgressUpdate {
-    pub stage: String,
-    pub current: u32,
-    pub total: u32,
-    pub message: String,
+enum IoMessage {
+    SaveJpg {
+        jpg_data: Vec<u8>,
+        output_path: PathBuf,
+        set_idx: usize,
+    },
+    Shutdown,
 }
 
-/// Process all folders in the batch (async version with progress reporting)
-///
-/// # Arguments
-/// * `folders` - List of folder entries to process
-/// * `config` - Application configuration
-/// * `gui_settings` - GUI settings
-/// * `progress_tx` - Channel sender for progress updates
-///
-/// # Returns
-/// Result indicating success or error message
-pub async fn process_folder_async(
-    folders: Vec<FolderEntry>,
-    config: Config,
-    gui_settings: GuiSettings,
-    progress_tx: mpsc::UnboundedSender<ProgressUpdate>,
-) -> Result<String, String> {
-    let total_folders = folders.len() as u32;
-    let mut processed = 0u32;
-    let mut errors = Vec::new();
+/// I/O worker that handles disk operations in parallel
+struct IoWorker {
+    sender: Sender<IoMessage>,
+}
 
-    for (folder_idx, folder) in folders.iter().enumerate() {
-        let stage_msg = format!("Processing folder {}/{}", folder_idx + 1, total_folders);
-        let _ = progress_tx.send(ProgressUpdate {
-            stage: "Overall".to_string(),
-            current: processed,
-            total: total_folders,
-            message: stage_msg.clone(),
+impl IoWorker {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        
+        // Spawn I/O thread
+        std::thread::spawn(move || {
+            Self::io_loop(receiver);
         });
-
-        match process_single_folder_async(&folder, &config, &gui_settings, &progress_tx).await {
-            Ok(msg) => {
-                processed += 1;
-                let _ = progress_tx.send(ProgressUpdate {
-                    stage: "Overall".to_string(),
-                    current: processed,
-                    total: total_folders,
-                    message: msg,
-                });
-            }
-            Err(err) => {
-                errors.push(format!("{}: {}", folder.path, err));
-                let _ = progress_tx.send(ProgressUpdate {
-                    stage: "Error".to_string(),
-                    current: processed,
-                    total: total_folders,
-                    message: format!("Error: {}", err),
-                });
+        
+        Self { sender }
+    }
+    
+    fn io_loop(receiver: Receiver<IoMessage>) {
+        while let Ok(msg) = receiver.recv() {
+            match msg {
+                IoMessage::SaveJpg { jpg_data, output_path, set_idx } => {
+                    // Ensure parent directory exists
+                    if let Some(parent) = output_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    
+                    // Save file
+                    match std::fs::write(&output_path, jpg_data) {
+                        Ok(_) => {
+                            println!("  [IO] Set {}: Saved {}", set_idx + 1, output_path.display());
+                        }
+                        Err(e) => {
+                            eprintln!("  [IO] Set {}: Failed to save {}: {}", set_idx + 1, output_path.display(), e);
+                        }
+                    }
+                }
+                IoMessage::Shutdown => {
+                    break;
+                }
             }
         }
     }
-
-    if errors.is_empty() {
-        let _ = progress_tx.send(ProgressUpdate {
-            stage: "Complete".to_string(),
-            current: total_folders,
-            total: total_folders,
-            message: format!("Successfully processed {} folders", processed),
-        });
-        Ok(format!("Successfully processed {} folders", processed))
-    } else {
-        let _ = progress_tx.send(ProgressUpdate {
-            stage: "Complete".to_string(),
-            current: processed,
-            total: total_folders,
-            message: format!("Completed with errors: {}", errors.join("; ")),
-        });
-        Err(format!(
-            "Completed with errors: {} of {} folders processed. Errors: {}",
-            processed, total_folders, errors.join("; ")
-        ))
+    
+    fn save_jpg(&self, jpg_data: Vec<u8>, output_path: PathBuf, set_idx: usize) -> Result<(), String> {
+        self.sender.send(IoMessage::SaveJpg { jpg_data, output_path, set_idx })
+            .map_err(|e| format!("Failed to queue I/O operation: {}", e))
     }
-}
-
-/// Process a single folder with progress reporting
-async fn process_single_folder_async(
-    folder: &FolderEntry,
-    config: &Config,
-    gui_settings: &GuiSettings,
-    progress_tx: &mpsc::UnboundedSender<ProgressUpdate>,
-) -> Result<String, String> {
-    let folder_path = Path::new(&folder.path);
-
-    if !folder_path.exists() {
-        return Err(format!("Folder does not exist: {}", folder.path));
+    
+    fn shutdown(self) {
+        let _ = self.sender.send(IoMessage::Shutdown);
     }
-
-    if folder.files.is_empty() {
-        return Err(format!("No files to process in: {}", folder.path));
-    }
-
-    let profile = config
-        .pp3_profiles
-        .iter()
-        .find(|p| p.name == folder.profile);
-    let profile_path = profile.map(|p| p.file_path.clone());
-
-    let merged_dir = folder_path.join("Merged");
-    std::fs::create_dir_all(&merged_dir)
-        .map_err(|e| format!("Failed to create merged directory: {}", e))?;
-
-    let logs_dir = merged_dir.join("logs");
-    std::fs::create_dir_all(&logs_dir)
-        .map_err(|e| format!("Failed to create logs directory: {}", e))?;
-
-    let total_stages = 5u32; // Total processing stages
-    let mut current_stage = 0u32;
-
-    // Stage 1: RAW processing (if needed)
-    current_stage += 1;
-    let _ = progress_tx.send(ProgressUpdate {
-        stage: format!("Stage {}/{}", current_stage, total_stages),
-        current: 0,
-        total: 1,
-        message: "Processing RAW files...".to_string(),
-    });
-
-    let tif_folder = merged_dir.join("tif");
-    let source_files = if folder.is_raw {
-        process_raw_files(
-            &folder.files,
-            &tif_folder,
-            &profile_path,
-            &config.exe_paths.rawtherapee_cli_exe,
-            &logs_dir,
-        )?
-    } else {
-        folder
-            .files
-            .iter()
-            .map(|f| PathBuf::from(&f.path))
-            .collect()
-    };
-
-    // Stage 2: Alignment
-    current_stage += 1;
-    let _ = progress_tx.send(ProgressUpdate {
-        stage: format!("Stage {}/{}", current_stage, total_stages),
-        current: 0,
-        total: 1,
-        message: "Aligning images...".to_string(),
-    });
-
-    let aligned_files = if gui_settings.do_align {
-        let align_folder = merged_dir.join("aligned");
-        let empty_exe = String::new();
-        align_images_by_set_concurrent(
-            &source_files,
-            &align_folder,
-            gui_settings.use_opencv_align,
-            if gui_settings.use_opencv_align {
-                &empty_exe
-            } else {
-                &config.exe_paths.align_image_stack_exe
-            },
-            folder,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?
-    } else {
-        source_files.clone()
-    };
-
-    // Stage 3: HDR Merge
-    current_stage += 1;
-    let _ = progress_tx.send(ProgressUpdate {
-        stage: format!("Stage {}/{}", current_stage, total_stages),
-        current: 0,
-        total: 1,
-        message: "Merging HDR images...".to_string(),
-    });
-
-    let exr_folder = merged_dir.join("exr");
-    let ev_source_files = folder.files.clone();
-
-    if gui_settings.use_opencv_debevec {
-        crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
-    } else if gui_settings.use_opencv_merge_robertson {
-        crate::process::opencv_merge::merge_with_opencv_robertson_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
-    } else if gui_settings.use_rust_merge {
-        let debug_export_dir;
-        let debug_export_path = if gui_settings.rust_merge_debug_export {
-            debug_export_dir = merged_dir.join("debug_rust_merge");
-            std::fs::create_dir_all(&debug_export_dir).ok();
-            Some(debug_export_dir.as_path())
-        } else {
-            None
-        };
-
-        crate::process::rust_merge::merge_with_rust_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-            debug_export_path,
-        )?;
-    } else {
-        crate::process::external_blender::merge_with_blender_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &folder.files,
-            &ev_source_files,
-            folder,
-            &config.exe_paths.blender_exe,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
-    }
-
-    // Wait for file handles to be released
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Stage 4: Tone mapping
-    current_stage += 1;
-    let _ = progress_tx.send(ProgressUpdate {
-        stage: format!("Stage {}/{}", current_stage, total_stages),
-        current: 0,
-        total: 1,
-        message: "Tone mapping to JPG...".to_string(),
-    });
-
-    let jpg_folder = merged_dir.join("jpg");
-    let hdr_folder = if gui_settings.use_opencv_debevec
-        || gui_settings.use_opencv_merge_robertson
-    {
-        exr_folder.clone()
-    } else {
-        exr_folder.clone()
-    };
-
-    if gui_settings.use_opencv_tonemap {
-        tone_map_with_opencv(
-            &hdr_folder,
-            &jpg_folder,
-            gui_settings,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?;
-    } else {
-        crate::process::external_luminance::tone_map_exr_to_jpg_concurrent(
-            &exr_folder,
-            &jpg_folder,
-            &config.exe_paths.luminance_cli_exe,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?;
-    }
-
-    // Stage 5: Cleanup
-    current_stage += 1;
-    let _ = progress_tx.send(ProgressUpdate {
-        stage: format!("Stage {}/{}", current_stage, total_stages),
-        current: 1,
-        total: 1,
-        message: "Cleaning up...".to_string(),
-    });
-
-    if gui_settings.do_cleanup {
-        cleanup_temp_files(&merged_dir, gui_settings.do_align)?;
-    }
-
-    Ok(format!("Successfully processed: {}", folder.path))
 }
 
 /// Process all folders in the batch
@@ -353,347 +125,331 @@ pub fn process_folder(
         return Err(format!("Failed to create logs directory: {}", e));
     }
 
+    // Create output directories
+    let jpg_folder = merged_dir.join("jpg");
+    if let Err(e) = std::fs::create_dir_all(&jpg_folder) {
+        return Err(format!("Failed to create jpg directory: {}", e));
+    }
+
     let total_start = Instant::now();
     println!("[PROCESS] Starting HDR processing for: {}", folder.path);
     println!(
-        "[PROCESS] Folders: {} sets, {} brackets per set",
-        folder.sets, folder.brackets
+        "[PROCESS] Total: {} sets, {} brackets per set, {} threads",
+        folder.sets, folder.brackets, gui_settings.threads
     );
     println!(
         "[PROCESS] Started at: {}",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     );
 
-    // Step 1: If RAW files, process with RawTherapee CLI to Merged/tif/
-    let tif_folder = merged_dir.join("tif");
-    let step_start = Instant::now();
-    let source_files = if folder.is_raw {
-        println!("[STEP 1] Processing RAW files with RawTherapee CLI...");
-        process_raw_files(
-            &folder.files,
-            &tif_folder,
+    // Start I/O worker for parallel disk operations
+    let io_worker = IoWorker::new();
+
+    // Process each bracket set
+    let mut completed_sets = 0u32;
+    let mut errors = Vec::new();
+
+    // Group files by sets
+    let bracket_count = folder.brackets as usize;
+    let total_sets = folder.sets as usize;
+
+    for set_idx in 0..total_sets {
+        let set_start = Instant::now();
+        let start_idx = set_idx * bracket_count;
+        let end_idx = std::cmp::min(start_idx + bracket_count, folder.files.len());
+        let set_files: Vec<&crate::scan_folder::ScannedFile> = folder.files[start_idx..end_idx].iter().collect();
+
+        if set_files.len() != bracket_count {
+            errors.push(format!("Set {} has incorrect number of files", set_idx + 1));
+            continue;
+        }
+
+        println!(
+            "\n[SET {}/{}] Processing {} files...",
+            set_idx + 1, total_sets, set_files.len()
+        );
+
+        // Process this bracket set
+        match process_single_set(
+            &set_files,
+            set_idx,
+            &merged_dir,
+            &jpg_folder,
+            &logs_dir,
             &profile_path,
-            &config.exe_paths.rawtherapee_cli_exe,
-            &logs_dir,
-        )?
-    } else {
-        println!("[STEP 1] Skipping RAW processing (non-RAW files)");
-        // For non-RAW files, use them directly
-        folder
-            .files
-            .iter()
-            .map(|f| PathBuf::from(&f.path))
-            .collect()
-    };
-    if folder.is_raw {
-        println!(
-            "[STEP 1] Completed in {:.2}s",
-            step_start.elapsed().as_secs_f32()
-        );
-    }
-
-    // Step 2: If alignment enabled, align each bracket set with align_image_stack to Merged/aligned/
-    let aligned_files = if gui_settings.do_align {
-        // Determine which align method to use
-        let use_opencv = gui_settings.use_opencv_align;
-        let empty_string = String::new();
-        
-        println!(
-            "[STEP 2] Aligning {} bracket sets with {} ({} threads)...",
-            folder.sets,
-            if use_opencv { "OpenCV AlignMTB" } else { "align_image_stack" },
-            gui_settings.threads
-        );
-        let step_start = Instant::now();
-        let align_folder = merged_dir.join("aligned");
-        let result = align_images_by_set_concurrent(
-            &source_files,
-            &align_folder,
-            use_opencv,
-            if use_opencv { &empty_string } else { &config.exe_paths.align_image_stack_exe },
-            folder,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?;
-        println!(
-            "[STEP 2] Completed in {:.2}s",
-            step_start.elapsed().as_secs_f32()
-        );
-        result
-    } else {
-        println!("[STEP 2] Skipping alignment (disabled)");
-        source_files.clone()
-    };
-
-    // Step 3: Merge each bracketed set using Blender
-    let exr_folder = merged_dir.join("exr");
-    
-    // For EV calculation, we always use the original scanned files (folder.files)
-    // This ensures we have accurate exposure information even after alignment
-    // which creates new files without EXIF data
-    let ev_source_files = folder.files.clone();
-
-    // Step 3: Merge each bracketed set using either OpenCV MergeDebevec/Robertson, Rust native merger, or Blender
-    if gui_settings.use_opencv_debevec {
-        println!(
-            "[STEP 3] Merging {} bracket sets with OpenCV MergeDebevec ({} threads)...",
-            folder.sets, gui_settings.threads
-        );
-        // Debug: Log the file paths being used for merging
-        println!("[STEP 3] Using {} files for OpenCV merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
-        if aligned_files.len() > 0 {
-            println!("[STEP 3] First file path: {}", aligned_files[0].display());
-            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
-        }
-    } else if gui_settings.use_opencv_merge_robertson {
-        println!(
-            "[STEP 3] Merging {} bracket sets with OpenCV MergeRobertson ({} threads)...",
-            folder.sets, gui_settings.threads
-        );
-        // Debug: Log the file paths being used for merging
-        println!("[STEP 3] Using {} files for OpenCV Robertson merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
-        if aligned_files.len() > 0 {
-            println!("[STEP 3] First file path: {}", aligned_files[0].display());
-            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
-        }
-    } else if gui_settings.use_rust_merge {
-        println!(
-            "[STEP 3] Merging {} bracket sets with native Rust merger ({} threads)...",
-            folder.sets, gui_settings.threads
-        );
-        // Debug: Log the file paths being used for merging
-        println!("[STEP 3] Using {} files for Rust merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
-        if aligned_files.len() > 0 {
-            println!("[STEP 3] First file path: {}", aligned_files[0].display());
-            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
-        }
-    } else {
-        // Default to Blender merge
-        println!(
-            "[STEP 3] Merging {} bracket sets with Blender ({} threads)...",
-            folder.sets, gui_settings.threads
-        );
-        // Debug: Log the file paths being used for merging
-        println!("[STEP 3] Using {} files for Blender merge (alignment: {})", aligned_files.len(), if gui_settings.do_align { "enabled" } else { "disabled" });
-        if aligned_files.len() > 0 {
-            println!("[STEP 3] First file path: {}", aligned_files[0].display());
-            println!("[STEP 3] File exists: {}", aligned_files[0].exists());
-        }
-    }
-    let step_start = Instant::now();
-
-    if gui_settings.use_opencv_debevec {
-        crate::process::opencv_merge::merge_with_opencv_debevec_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
-    } else if gui_settings.use_opencv_merge_robertson {
-        crate::process::opencv_merge::merge_with_opencv_robertson_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
-    } else if gui_settings.use_rust_merge {
-        // Setup debug export folder if enabled
-        let debug_export_dir;
-        let debug_export_path = if gui_settings.rust_merge_debug_export {
-            debug_export_dir = merged_dir.join("debug_rust_merge");
-            if let Err(e) = std::fs::create_dir_all(&debug_export_dir) {
-                eprintln!("Failed to create debug export folder: {}", e);
+            config,
+            gui_settings,
+            &io_worker,
+        ) {
+            Ok(_) => {
+                completed_sets += 1;
+                println!(
+                    "[SET {}/{}] ✓ Complete in {:.2}s",
+                    set_idx + 1, total_sets, set_start.elapsed().as_secs_f32()
+                );
             }
-            Some(debug_export_dir.as_path())
-        } else {
-            None
-        };
-
-        crate::process::rust_merge::merge_with_rust_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            folder,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-            debug_export_path,
-        )?;
-    } else {
-        crate::process::external_blender::merge_with_blender_concurrent(
-            &aligned_files,
-            &exr_folder,
-            &ev_source_files,
-            &ev_source_files,
-            folder,
-            &config.exe_paths.blender_exe,
-            &logs_dir,
-            folder.sets,
-            gui_settings.threads as usize,
-        )?;
+            Err(e) => {
+                errors.push(format!("Set {}: {}", set_idx + 1, e));
+                println!("  [SET {}/{}] ✗ Failed: {}", set_idx + 1, total_sets, e);
+            }
+        }
     }
-    println!(
-        "[STEP 3] Completed in {:.2}s",
-        step_start.elapsed().as_secs_f32()
-    );
 
-    // Wait a moment for all file handles to be released and files to be fully written
+    // Wait for all I/O operations to complete
+    io_worker.shutdown();
+    // Give I/O thread time to finish
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Step 4: Tone map HDR to JPG using either OpenCV or Luminance CLI
-    let jpg_folder = merged_dir.join("jpg");
-
-    // Determine which files to tone map (EXR for Blender/Rust, TIFF for OpenCV merge)
-    let hdr_folder = if gui_settings.use_opencv_debevec || gui_settings.use_opencv_merge_robertson {
-        exr_folder.clone() // TIFF files from OpenCV merge
-    } else {
-        exr_folder.clone() // EXR files from Blender/Rust
-    };
-
-    if gui_settings.use_opencv_tonemap {
-        println!(
-            "[STEP 4] Tone mapping HDR to JPG with OpenCV ({} threads)...",
-            gui_settings.threads
-        );
-        let step_start = Instant::now();
-        tone_map_with_opencv(
-            &hdr_folder,
-            &jpg_folder,
-            gui_settings,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?;
-        println!(
-            "[STEP 4] Completed in {:.2}s",
-            step_start.elapsed().as_secs_f32()
-        );
-    } else {
-        println!(
-            "[STEP 4] Tone mapping EXR files to JPG with Luminance CLI ({} threads)...",
-            gui_settings.threads
-        );
-        let step_start = Instant::now();
-        crate::process::external_luminance::tone_map_exr_to_jpg_concurrent(
-            &exr_folder,
-            &jpg_folder,
-            &config.exe_paths.luminance_cli_exe,
-            &logs_dir,
-            gui_settings.threads as usize,
-        )?;
-        println!(
-            "[STEP 4] Completed in {:.2}s",
-            step_start.elapsed().as_secs_f32()
-        );
-    }
-
-    // Step 5: Cleanup temporary files if enabled
+    // Cleanup if enabled
     if gui_settings.do_cleanup {
-        println!("[STEP 5] Cleaning up temporary files...");
+        println!("\n[CLEANUP] Cleaning up temporary files...");
         cleanup_temp_files(&merged_dir, gui_settings.do_align)?;
-    } else {
-        println!("[STEP 5] Skipping cleanup (disabled)");
     }
 
-    println!("[PROCESS] ✓ Successfully processed: {}", folder.path);
+    println!("\n[PROCESS] {} Successfully processed: {}", 
+        if errors.is_empty() { "✓" } else { "⚠" }, folder.path);
     let total_elapsed = total_start.elapsed();
     println!(
         "[PROCESS] Total time: {:.2}s ({:.2} min)",
         total_elapsed.as_secs_f32(),
         total_elapsed.as_secs_f32() / 60.0
     );
+    println!(
+        "[PROCESS] Completed {}/{} sets",
+        completed_sets, total_sets
+    );
 
-    Ok(format!("Successfully processed: {}", folder.path))
+    if errors.is_empty() {
+        Ok(format!("Successfully processed {} sets in {:.2}s", 
+            completed_sets, total_elapsed.as_secs_f32()))
+    } else {
+        Err(format!(
+            "Completed {}/{} sets with {} errors: {}",
+            completed_sets, total_sets, errors.len(), errors.join("; ")
+        ))
+    }
 }
 
-/// Process RAW files with RawTherapee CLI
-/// Outputs TIFF files to the tif_folder
+/// Process a single bracket set
 ///
-/// Command: rawtherapee_cli -p pp3_file -o tif_folder -t -c raw_file1 raw_file2 ...
-///
-/// # Arguments
-/// * `raw_files` - List of RAW files to process
-/// * `tif_folder` - Output directory for TIFF files (Merged/tif/)
-/// * `profile_path` - Optional PP3 profile path
-/// * `rawtherapee_exe` - Path to RawTherapee CLI executable
-/// * `logs_dir` - Directory to save log files
-///
-/// # Returns
-/// List of generated TIFF file paths
-fn process_raw_files(
-    raw_files: &[crate::scan_folder::ScannedFile],
+/// Flow:
+/// 1. RAW processing (if needed) → memory/buffer
+/// 2. Alignment (if enabled) → memory/buffer
+/// 3. HDR Merge → memory/buffer
+/// 4. Tone mapping → I/O worker (parallel)
+fn process_single_set(
+    set_files: &[&crate::scan_folder::ScannedFile],
+    set_idx: usize,
+    merged_dir: &Path,
+    jpg_folder: &Path,
+    logs_dir: &Path,
+    profile_path: &Option<String>,
+    config: &Config,
+    gui_settings: &GuiSettings,
+    io_worker: &IoWorker,
+) -> Result<(), String> {
+    let mut current_files: Vec<PathBuf>;
+    let mut temp_files_to_cleanup: Vec<PathBuf> = Vec::new();
+
+    // Step 1: RAW processing (if needed)
+    let is_raw = set_files.iter().any(|f| {
+        Path::new(&f.path).extension()
+            .map(|ext| {
+                let ext_lower = ext.to_string_lossy().to_lowercase();
+                matches!(ext_lower.as_str(), "dng" | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" | "pef")
+            })
+            .unwrap_or(false)
+    });
+
+    if is_raw {
+        println!("  [STEP 1] Processing {} RAW files...", set_files.len());
+        let step_start = Instant::now();
+        
+        let tif_folder = merged_dir.join("tif");
+        current_files = process_raw_files_for_set(
+            set_files,
+            &tif_folder,
+            profile_path,
+            &config.exe_paths.rawtherapee_cli_exe,
+            logs_dir,
+            set_idx,
+        )?;
+        temp_files_to_cleanup.extend(current_files.clone());
+        
+        println!("    Time: {:.2}s", step_start.elapsed().as_secs_f32());
+    } else {
+        println!("  [STEP 1] Skipping RAW (non-RAW files)");
+        current_files = set_files.iter().map(|f| PathBuf::from(&f.path)).collect();
+    }
+
+    // Step 2: Alignment (if enabled)
+    if gui_settings.do_align {
+        println!("  [STEP 2] Aligning {} files...", current_files.len());
+        let step_start = Instant::now();
+        
+        let align_folder = merged_dir.join("aligned");
+        let use_opencv = gui_settings.use_opencv_align;
+        let empty_string = String::new();
+        
+        current_files = align_single_set(
+            &current_files,
+            &align_folder,
+            set_idx,
+            if use_opencv { &empty_string } else { &config.exe_paths.align_image_stack_exe },
+            logs_dir,
+            use_opencv,
+        )?;
+        // Don't add to temp_files - alignment files are cleaned up separately
+        
+        println!("    Time: {:.2}s", step_start.elapsed().as_secs_f32());
+    } else {
+        println!("  [STEP 2] Skipping alignment");
+    }
+
+    // Step 3: HDR Merge
+    println!("  [STEP 3] Merging HDR...");
+    let step_start = Instant::now();
+    
+    let exr_folder = merged_dir.join("exr");
+    
+    // Get EV values from original files
+    let ev_source_files: Vec<crate::scan_folder::ScannedFile> = set_files.iter().map(|f| (*f).clone()).collect();
+    
+    let hdr_output_path = if gui_settings.use_opencv_debevec {
+        crate::process::opencv_merge::merge_single_set_debevec(
+            &current_files,
+            &exr_folder,
+            &ev_source_files,
+            set_idx,
+            logs_dir,
+        )?
+    } else if gui_settings.use_opencv_merge_robertson {
+        crate::process::opencv_merge::merge_single_set_robertson(
+            &current_files,
+            &exr_folder,
+            &ev_source_files,
+            set_idx,
+            logs_dir,
+        )?
+    } else if gui_settings.use_rust_merge {
+        let debug_export_path = if gui_settings.rust_merge_debug_export {
+            let debug_dir = merged_dir.join("debug_rust_merge");
+            let _ = std::fs::create_dir_all(&debug_dir);
+            Some(debug_dir)
+        } else {
+            None
+        };
+        
+        crate::process::rust_merge::merge_single_set(
+            &current_files,
+            &exr_folder,
+            &ev_source_files,
+            set_idx,
+            logs_dir,
+            debug_export_path.as_deref(),
+        )?
+    } else {
+        // Blender merge
+        crate::process::external_blender::merge_single_set(
+            &current_files,
+            &exr_folder,
+            &ev_source_files,
+            set_idx,
+            &config.exe_paths.blender_exe,
+            logs_dir,
+        )?
+    };
+    
+    println!("    Time: {:.2}s", step_start.elapsed().as_secs_f32());
+
+    // Step 4: Tone mapping
+    println!("  [STEP 4] Tone mapping to JPG...");
+    let step_start = Instant::now();
+    
+    let jpg_output_path = jpg_folder.join(format!("HDR_set_{:03}.jpg", set_idx));
+    
+    if gui_settings.use_opencv_tonemap {
+        // OpenCV tone mapping - reads from EXR, outputs JPG data
+        let jpg_data = crate::process::opencv_tonemap::tone_map_single_file_opencv(
+            &hdr_output_path,
+            gui_settings,
+        )?;
+        
+        // Queue I/O operation (parallel with next bracket processing)
+        io_worker.save_jpg(jpg_data, jpg_output_path, set_idx)?;
+    } else {
+        // Luminance CLI tone mapping
+        crate::process::external_luminance::tone_map_single_file(
+            &hdr_output_path,
+            &jpg_output_path,
+            &config.exe_paths.luminance_cli_exe,
+            logs_dir,
+            set_idx,
+        )?;
+    }
+    
+    println!("    Time: {:.2}s", step_start.elapsed().as_secs_f32());
+
+    // Cleanup temporary RAW files if any
+    for temp_file in &temp_files_to_cleanup {
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    Ok(())
+}
+
+/// Process RAW files for a single set
+fn process_raw_files_for_set(
+    set_files: &[&crate::scan_folder::ScannedFile],
     tif_folder: &Path,
     profile_path: &Option<String>,
     rawtherapee_exe: &str,
     logs_dir: &Path,
+    set_idx: usize,
 ) -> Result<Vec<PathBuf>, String> {
-    // Create tif output directory
     if let Err(e) = std::fs::create_dir_all(tif_folder) {
         return Err(format!("Failed to create tif directory: {}", e));
     }
 
-    // Check if we have a profile
     let Some(pp3_file) = profile_path else {
         return Err("No PP3 profile selected for RAW processing".to_string());
     };
 
-    // Check if RawTherapee CLI is configured
     if rawtherapee_exe.is_empty() {
-        return Err("RawTherapee CLI not configured in setup".to_string());
+        return Err("RawTherapee CLI not configured".to_string());
     }
 
-    // Build RawTherapee CLI command
-    // Command: rawtherapee_cli -p pp3_file -o tif_folder -t -c raw_file1 raw_file2 ...
     let mut cmd = Command::new(rawtherapee_exe);
     cmd.arg("-p")
         .arg(pp3_file)
         .arg("-o")
         .arg(tif_folder.to_str().ok_or("Invalid tif folder path")?)
-        .arg("-t") // Use threads
-        .arg("-c"); // Overwrite existing files
+        .arg("-t")
+        .arg("-c");
 
-    // Add all RAW files to process
-    for raw_file in raw_files {
+    for raw_file in set_files {
         cmd.arg(&raw_file.path);
     }
 
-    println!("  [RAW] Processing {} files...", raw_files.len());
-    let step_start = Instant::now();
-
-    // Execute command and capture output
     let output = cmd
         .output()
         .map_err(|e| format!("Failed to execute RawTherapee CLI: {}", e))?;
 
     // Save logs
-    let log_file = logs_dir.join("rawtherapee.log");
+    let log_file = logs_dir.join(format!("rawtherapee_set_{:03}.log", set_idx));
     let mut log_content = String::new();
-    log_content.push_str("=== RawTherapee CLI Processing ===\n\n");
+    log_content.push_str(&format!("=== RawTherapee CLI - Set {} ===\n\n", set_idx));
     log_content.push_str(&format!("Command: {:?}\n\n", cmd));
     log_content.push_str("STDOUT:\n");
     log_content.push_str(&String::from_utf8_lossy(&output.stdout));
     log_content.push_str("\nSTDERR:\n");
     log_content.push_str(&String::from_utf8_lossy(&output.stderr));
-
-    if let Err(e) = std::fs::write(&log_file, &log_content) {
-        eprintln!("Warning: Failed to write log file: {}", e);
-    }
+    let _ = std::fs::write(&log_file, &log_content);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("  [RAW] ✗ Failed!");
         return Err(format!("RawTherapee processing failed: {}", stderr));
     }
-
-    println!(
-        "  [RAW] ✓ Complete (Time: {:.2}s)",
-        step_start.elapsed().as_secs_f32()
-    );
 
     // Collect generated TIFF files
     let mut tif_files = Vec::new();
@@ -702,111 +458,19 @@ fn process_raw_files(
             let path = entry.path();
             if path.is_file() {
                 if let Some(ext) = path.extension() {
-                    if ext.to_string_lossy().to_lowercase() == "tif"
-                        || ext.to_string_lossy().to_lowercase() == "tiff"
-                    {
-                        tif_files.push(path);
-                    }
-                }
-            }
-        }
-    }
-
-    // Sort by filename for consistent ordering
-    tif_files.sort();
-
-    Ok(tif_files)
-}
-
-/// Align a single bracket set using align_image_stack
-///
-/// # Arguments
-/// * `set_files` - Files in this bracket set to align
-/// * `align_folder` - Output directory for aligned files
-/// * `set_idx` - Set index for naming
-/// * `align_exe` - Path to align_image_stack executable
-/// * `logs_dir` - Directory to save log files
-///
-/// # Returns
-/// List of aligned file paths for this set
-fn align_single_set(
-    set_files: &[PathBuf],
-    align_folder: &Path,
-    set_idx: usize,
-    align_exe: &str,
-    logs_dir: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    // Build align_image_stack command for this set
-    // Command: align_image_stack -v -i -l -a align_folder/align_set_N_ --gpu file1 file2 ...
-    let mut cmd = Command::new(align_exe);
-    cmd.arg("-v") // Verbose
-        .arg("-i") // Auto-crop
-        .arg("-l") // Keep linear values
-        .arg("-a")
-        .arg(
-            align_folder
-                .join(format!("align_set_{}_", set_idx))
-                .to_str()
-                .ok_or("Invalid align folder path")?,
-        )
-        .arg("--gpu");
-
-    // Add files for this set only
-    for file in set_files {
-        cmd.arg(file);
-    }
-
-    // Execute command and capture output
-    let output = cmd.output().map_err(|e| {
-        format!(
-            "Failed to execute align_image_stack for set {}: {}",
-            set_idx, e
-        )
-    })?;
-
-    // Save logs for this set
-    let log_file = logs_dir.join(format!("align_image_stack_set_{:03}.log", set_idx));
-    let mut log_content = String::new();
-    log_content.push_str(&format!("=== Align Image Stack - Set {} ===\n\n", set_idx));
-    log_content.push_str(&format!("Command: {:?}\n\n", cmd));
-    log_content.push_str("Files:\n");
-    for file in set_files {
-        log_content.push_str(&format!("  {}\n", file.display()));
-    }
-    log_content.push_str("\nSTDOUT:\n");
-    log_content.push_str(&String::from_utf8_lossy(&output.stdout));
-    log_content.push_str("\nSTDERR:\n");
-    log_content.push_str(&String::from_utf8_lossy(&output.stderr));
-
-    if let Err(e) = std::fs::write(&log_file, &log_content) {
-        eprintln!("Warning: Failed to write log file: {}", e);
-    }
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("  [ALIGN] Set {}/{}: ✗ Failed!", set_idx + 1, 1);
-        return Err(format!("Alignment failed for set {}: {}", set_idx, stderr));
-    }
-
-    println!("  [ALIGN] Set {}/{}: ✓ Complete", set_idx + 1, 1);
-
-    // Collect aligned files for this set
-    // They will be named align_set_N_0001.tif, align_set_N_0002.tif, etc.
-    let mut set_aligned_files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(align_folder) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(name) = path.file_name() {
-                    let name_str = name.to_string_lossy();
-                    // Check if this file belongs to the current set
-                    if name_str.starts_with(&format!("align_set_{}_", set_idx)) {
-                        if let Some(ext) = path.extension() {
-                            if ext.to_string_lossy().to_lowercase() == "tif"
-                                || ext.to_string_lossy().to_lowercase() == "tiff"
-                            {
-                                set_aligned_files.push(path);
-                            }
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    if ext_lower == "tif" || ext_lower == "tiff" {
+                        // Check if this file was just created for this set
+                        if set_files.iter().any(|f| {
+                            let raw_name = Path::new(&f.path).file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let tif_name = path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            raw_name == tif_name
+                        }) {
+                            tif_files.push(path);
                         }
                     }
                 }
@@ -814,240 +478,101 @@ fn align_single_set(
         }
     }
 
-    // Sort by filename for consistent ordering
-    set_aligned_files.sort();
-    Ok(set_aligned_files)
+    tif_files.sort();
+    Ok(tif_files)
 }
 
-/// Merge bracketed sets using Blender HDR_Merge.blend
-///
-/// Command: blender.exe --background HDR_Merge.blend --factory-startup --python blender_merge.py --
-///          resolution exr_path filter_used bracket_id imgpath1___ev1 imgpath2___ev2 ...
-///
-/// # Arguments
-/// * `files` - List of aligned file paths to merge
-/// * `exr_folder` - Output directory for EXR files (Merged/exr/)
-/// * `source_files` - Original scanned files with EXIF data (for file paths)
-/// * `ev_source_files` - Files with EXIF data for EV calculation (original RAW files)
-/// * `folder` - Folder entry for metadata
-/// * `blender_exe` - Path to Blender executable
-/// * `logs_dir` - Directory to save log files
-/// * `total_sets` - Total number of sets for progress reporting
-///
-/// # Returns
-/// Result indicating success
-
-/// Reload aligned files from the aligned directory
-#[allow(dead_code)]
-fn reload_aligned_files(align_dir: &Path) -> Result<Vec<crate::scan_folder::ScannedFile>, String> {
-    let mut files = Vec::new();
-
-    if !align_dir.exists() {
-        return Ok(files);
-    }
-
-    if let Ok(entries) = std::fs::read_dir(align_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext.to_string_lossy().to_lowercase() == "tif"
-                        || ext.to_string_lossy().to_lowercase() == "tiff"
-                    {
-                        files.push(crate::scan_folder::ScannedFile {
-                            path: path.to_string_lossy().to_string(),
-                            exposure_time: None,
-                            f_number: None,
-                            iso: None,
-                            bias: None,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
-}
-
-/// Align images by bracket set using parallel processing
-///
-/// # Arguments
-/// * `source_files` - List of all source files to align
-/// * `align_folder` - Output directory for aligned files (Merged/aligned/)
-/// * `use_opencv_align` - Whether to use OpenCV AlignMTB instead of align_image_stack
-/// * `align_exe` - Path to align_image_stack executable (used if use_opencv_align is false)
-/// * `folder` - Folder entry with bracket/set information
-/// * `logs_dir` - Directory to save log files
-/// * `threads` - Number of concurrent threads to use
-///
-/// # Returns
-/// List of aligned file paths (all sets combined, in order)
-fn align_images_by_set_concurrent(
-    source_files: &[PathBuf],
+/// Align a single bracket set
+fn align_single_set(
+    set_files: &[PathBuf],
     align_folder: &Path,
-    use_opencv_align: bool,
+    set_idx: usize,
     align_exe: &str,
-    folder: &FolderEntry,
     logs_dir: &Path,
-    threads: usize,
+    use_opencv: bool,
 ) -> Result<Vec<PathBuf>, String> {
-    if source_files.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Create align output directory
     if let Err(e) = std::fs::create_dir_all(align_folder) {
         return Err(format!("Failed to create align directory: {}", e));
     }
 
-    // Check if align_image_stack is configured (only needed if not using OpenCV)
-    if !use_opencv_align && align_exe.is_empty() {
-        return Err("align_image_stack not configured in setup".to_string());
+    if !use_opencv && align_exe.is_empty() {
+        return Err("align_image_stack not configured".to_string());
     }
 
-    // Group files by bracket sets
-    let bracket_count = folder.brackets as usize;
-    if bracket_count == 0 {
-        return Err("No brackets detected".to_string());
-    }
+    if use_opencv {
+        crate::process::opencv_align::align_set_with_opencv(
+            set_files,
+            align_folder,
+            set_idx,
+            logs_dir,
+        )
+    } else {
+        // align_image_stack
+        let mut cmd = Command::new(align_exe);
+        cmd.arg("-v")
+            .arg("-i")
+            .arg("-l")
+            .arg("-a")
+            .arg(
+                align_folder
+                    .join(format!("align_set_{}_", set_idx))
+                    .to_str()
+                    .ok_or("Invalid align folder path")?,
+            )
+            .arg("--gpu");
 
-    // Create a vector of set indices to process
-    let set_indices: Vec<usize> = (0..folder.sets as usize).collect();
-
-    // Process sets in parallel with limited concurrency
-    use rayon::prelude::*;
-    let results: Vec<Result<Vec<PathBuf>, String>> = set_indices
-        .par_iter()
-        .with_max_len(threads)
-        .map(|&set_idx| {
-            let set_start = Instant::now();
-            let start_idx = set_idx * bracket_count;
-            let end_idx = std::cmp::min(start_idx + bracket_count, source_files.len());
-            let set_files: Vec<PathBuf> = source_files[start_idx..end_idx].to_vec();
-
-            if set_files.len() != bracket_count {
-                return Ok(Vec::new());
-            }
-
-            if use_opencv_align {
-                println!(
-                    "  [ALIGN] Set {}/{}: Aligning {} files with OpenCV AlignMTB...",
-                    set_idx + 1,
-                    folder.sets,
-                    set_files.len()
-                );
-                let aligned = crate::process::opencv_align::align_set_with_opencv(
-                    &set_files,
-                    align_folder,
-                    set_idx,
-                    logs_dir,
-                )?;
-                println!(
-                    "  [ALIGN] Set {}/{}: Time: {:.2}s",
-                    set_idx + 1,
-                    folder.sets,
-                    set_start.elapsed().as_secs_f32()
-                );
-                Ok(aligned)
-            } else {
-                println!(
-                    "  [ALIGN] Set {}/{}: Aligning {} files with align_image_stack...",
-                    set_idx + 1,
-                    folder.sets,
-                    set_files.len()
-                );
-                let aligned =
-                    align_single_set(&set_files, align_folder, set_idx, align_exe, logs_dir)?;
-                println!(
-                    "  [ALIGN] Set {}/{}: Time: {:.2}s",
-                    set_idx + 1,
-                    folder.sets,
-                    set_start.elapsed().as_secs_f32()
-                );
-                Ok(aligned)
-            }
-        })
-        .collect();
-
-    // Collect results
-    let mut all_aligned_files = Vec::new();
-    for result in results {
-        match result {
-            Ok(files) => all_aligned_files.extend(files),
-            Err(e) => return Err(e),
+        for file in set_files {
+            cmd.arg(file);
         }
-    }
 
-    // Sort by filename to maintain order
-    all_aligned_files.sort();
+        let output = cmd.output().map_err(|e| {
+            format!("Failed to execute align_image_stack: {}", e)
+        })?;
 
-    Ok(all_aligned_files)
-}
+        // Save logs
+        let log_file = logs_dir.join(format!("align_set_{:03}.log", set_idx));
+        let mut log_content = String::new();
+        log_content.push_str(&format!("=== Align Image Stack - Set {} ===\n\n", set_idx));
+        log_content.push_str(&format!("Command: {:?}\n\n", cmd));
+        log_content.push_str("STDOUT:\n");
+        log_content.push_str(&String::from_utf8_lossy(&output.stdout));
+        log_content.push_str("\nSTDERR:\n");
+        log_content.push_str(&String::from_utf8_lossy(&output.stderr));
+        let _ = std::fs::write(&log_file, &log_content);
 
-/// Tone map HDR files to JPG using OpenCV
-fn tone_map_with_opencv(
-    hdr_folder: &Path,
-    jpg_folder: &Path,
-    gui_settings: &GuiSettings,
-    logs_dir: &Path,
-    threads: usize,
-) -> Result<(), String> {
-    // Get list of HDR files (both EXR and TIFF)
-    let mut hdr_files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(hdr_folder) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    let ext_lower = ext.to_string_lossy().to_lowercase();
-                    if ext_lower == "exr" || ext_lower == "tif" || ext_lower == "tiff" {
-                        hdr_files.push(path);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Alignment failed: {}", stderr));
+        }
+
+        // Collect aligned files
+        let mut aligned_files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(align_folder) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name() {
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with(&format!("align_set_{}_", set_idx)) {
+                            if let Some(ext) = path.extension() {
+                                let ext_lower = ext.to_string_lossy().to_lowercase();
+                                if ext_lower == "tif" || ext_lower == "tiff" {
+                                    aligned_files.push(path);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        aligned_files.sort();
+        Ok(aligned_files)
     }
-
-    if hdr_files.is_empty() {
-        return Err("No HDR files found for tone mapping".to_string());
-    }
-
-    // Sort by filename
-    hdr_files.sort();
-
-    // Create tone mapping params from gui_settings
-    let operator = match gui_settings.tonemap_operator.to_lowercase().as_str() {
-        "drago" => crate::process::opencv_tonemap::ToneMappingOperator::Drago,
-        "mantiuk" => crate::process::opencv_tonemap::ToneMappingOperator::Mantiuk,
-        _ => crate::process::opencv_tonemap::ToneMappingOperator::Reinhard,
-    };
-
-    let params = crate::process::opencv_tonemap::ToneMappingParams {
-        operator,
-        intensity: gui_settings.tonemap_intensity,
-        contrast: gui_settings.tonemap_contrast,
-        saturation: gui_settings.tonemap_saturation,
-        detail: 0.0,
-    };
-
-    // Use OpenCV tone mapping
-    crate::process::opencv_tonemap::tone_map_hdr_to_jpg_opencv(
-        &hdr_files, jpg_folder, &params, logs_dir, threads,
-    )
 }
 
 /// Cleanup temporary files
-///
-/// # Arguments
-/// * `merged_dir` - Merged directory path
-/// * `aligned` - Whether alignment was performed
-///
-/// # Returns
-/// Result indicating success
 fn cleanup_temp_files(merged_dir: &Path, aligned: bool) -> Result<(), String> {
-    // Remove aligned directory if it exists
     if aligned {
         let align_dir = merged_dir.join("aligned");
         if align_dir.exists() {
@@ -1056,18 +581,5 @@ fn cleanup_temp_files(merged_dir: &Path, aligned: bool) -> Result<(), String> {
         }
     }
 
-    // Optionally remove tif folder if RAW processing was done
-    // This is typically not desired as users may want to keep the TIFFs
-    // Could be made configurable in the future
-
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_process_folder_exists() {
-        // Basic test to ensure the function signature is correct
-        // Integration tests would require actual files and executables
-    }
 }

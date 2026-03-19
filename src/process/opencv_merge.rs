@@ -502,3 +502,43 @@ fn parse_exposure_time(exp_str: &str) -> Option<f32> {
 
     None
 }
+
+/// Merge a single bracket set using OpenCV MergeDebevec
+/// Returns the path to the generated EXR file
+pub fn merge_single_set_debevec(
+    source_files: &[PathBuf],
+    exr_folder: &Path,
+    ev_source_files: &[crate::scan_folder::ScannedFile],
+    set_idx: usize,
+    logs_dir: &Path,
+) -> Result<PathBuf, String> {
+    // Extract exposure times
+    let exposure_times = extract_exposure_times(ev_source_files);
+    
+    // Generate output filename
+    let out_filename = format!("merged_{:03}.exr", set_idx);
+    let exr_path = exr_folder.join(&out_filename);
+    
+    // Merge using OpenCV MergeDebevec
+    merge_with_debevec(source_files, &exposure_times, &exr_path, logs_dir, set_idx)
+}
+
+/// Merge a single bracket set using OpenCV MergeRobertson
+/// Returns the path to the generated EXR file
+pub fn merge_single_set_robertson(
+    source_files: &[PathBuf],
+    exr_folder: &Path,
+    ev_source_files: &[crate::scan_folder::ScannedFile],
+    set_idx: usize,
+    logs_dir: &Path,
+) -> Result<PathBuf, String> {
+    // Extract exposure times
+    let exposure_times = extract_exposure_times(ev_source_files);
+    
+    // Generate output filename
+    let out_filename = format!("merged_{:03}.exr", set_idx);
+    let exr_path = exr_folder.join(&out_filename);
+    
+    // Merge using OpenCV MergeRobertson
+    merge_with_robertson(source_files, &exposure_times, &exr_path, logs_dir, set_idx)
+}

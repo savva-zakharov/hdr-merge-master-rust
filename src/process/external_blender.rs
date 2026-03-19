@@ -247,3 +247,121 @@ fn get_filter_from_profile(folder: &FolderEntry) -> String {
         String::new()
     }
 }
+
+/// Merge a single bracket set using Blender
+/// Returns the path to the generated EXR file
+pub fn merge_single_set(
+    files: &[PathBuf],
+    exr_folder: &Path,
+    ev_source_files: &[crate::scan_folder::ScannedFile],
+    set_idx: usize,
+    blender_exe: &str,
+    logs_dir: &Path,
+) -> Result<PathBuf, String> {
+    use std::process::Command;
+
+    if files.is_empty() {
+        return Err("No files to merge".to_string());
+    }
+
+    if blender_exe.is_empty() {
+        return Err("Blender executable not configured".to_string());
+    }
+
+    // Create EXR output directory
+    if let Err(e) = std::fs::create_dir_all(exr_folder) {
+        return Err(format!("Failed to create exr directory: {}", e));
+    }
+
+    // Get the blend file and python script paths
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let blender_folder = exe_dir.join("blender");
+    let blend_file = blender_folder.join("HDR_Merge.blend");
+    let merge_py = blender_folder.join("blender_merge.py");
+
+    let blend_file = if blend_file.exists() {
+        blend_file
+    } else {
+        let alt_blend = Path::new("blender").join("HDR_Merge.blend");
+        if alt_blend.exists() { alt_blend } else { return Err("HDR_Merge.blend not found".to_string()); }
+    };
+
+    let merge_py = if merge_py.exists() {
+        merge_py
+    } else {
+        let alt_py = Path::new("blender").join("blender_merge.py");
+        if alt_py.exists() { alt_py } else { return Err("blender_merge.py not found".to_string()); }
+    };
+
+    // Get resolution from the first file
+    let temp_file = crate::scan_folder::ScannedFile {
+        path: files[0].to_string_lossy().to_string(),
+        exposure_time: None,
+        f_number: None,
+        iso: None,
+        bias: None,
+    };
+    let resolution = get_resolution_from_file(&temp_file);
+
+    // Get filter (use empty for single set)
+    let filter_used = String::new();
+
+    // Calculate EV values
+    let ev_values = ev_calc::calculate_relative_evs(ev_source_files);
+
+    // Build file list with exposure values
+    let mut file_args = Vec::new();
+    for (file, ev) in files.iter().zip(ev_values.iter()) {
+        file_args.push(format!("{}___{:.3}", file.display(), ev));
+    }
+
+    // Generate output filename
+    let exr_filename = format!("merged_{:03}.exr", set_idx);
+    let exr_path = exr_folder.join(&exr_filename);
+
+    // Build Blender command
+    let mut cmd = Command::new(blender_exe);
+    cmd.arg("--background")
+        .arg(&blend_file)
+        .arg("--factory-startup")
+        .arg("--python")
+        .arg(&merge_py)
+        .arg("--")
+        .arg(&resolution)
+        .arg(exr_path.to_str().ok_or("Invalid EXR output path")?)
+        .arg(&filter_used)
+        .arg(set_idx.to_string());
+
+    for file_arg in &file_args {
+        cmd.arg(file_arg);
+    }
+
+    // Execute Blender
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute Blender: {}", e))?;
+
+    // Save logs
+    let log_file = logs_dir.join(format!("blender_merge_set_{:03}.log", set_idx));
+    let mut log_content = String::new();
+    log_content.push_str(&format!("=== Blender HDR Merge - Set {} ===\n\n", set_idx));
+    log_content.push_str(&format!("Command: {:?}\n\n", cmd));
+    log_content.push_str("STDOUT:\n");
+    log_content.push_str(&String::from_utf8_lossy(&output.stdout));
+    log_content.push_str("\nSTDERR:\n");
+    log_content.push_str(&String::from_utf8_lossy(&output.stderr));
+    let _ = std::fs::write(&log_file, &log_content);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Blender merge failed for set {}: {}\n{}", set_idx, stderr, stdout));
+    }
+
+    println!("    [BLENDER] Set {}: ✓ Complete (output: {})", set_idx, exr_path.display());
+
+    Ok(exr_path)
+}

@@ -1073,3 +1073,99 @@ pub fn merge_with_rust_concurrent(
 
     Ok(())
 }
+
+/// Merge a single bracket set using the native Rust merger
+/// Returns the path to the generated EXR file
+pub fn merge_single_set(
+    files: &[PathBuf],
+    exr_folder: &Path,
+    ev_source_files: &[ScannedFile],
+    set_idx: usize,
+    logs_dir: &Path,
+    debug_export: Option<&Path>,
+) -> Result<PathBuf, String> {
+    use std::fs;
+    use std::io::Write;
+
+    let set_start = Instant::now();
+    println!("    [RUST_MERGE] Merging {} files with native Rust merger...", files.len());
+
+    // Create output directory
+    fs::create_dir_all(exr_folder)
+        .map_err(|e| format!("Failed to create EXR folder: {}", e))?;
+
+    // Generate output filename
+    let out_filename = format!("merged_{:03}.exr", set_idx);
+    let exr_path = exr_folder.join(&out_filename);
+
+    // Calculate EV values
+    let ev_values = calculate_relative_evs(ev_source_files);
+
+    // Convert file paths to strings
+    let file_paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+
+    // Merge using the existing merge_from_files function
+    let log = LogCollector::new();
+    let hdr = merge_from_files(&file_paths, &ev_values, debug_export, set_idx, Some(&log))?;
+
+    // Save to EXR
+    save_linear_image_to_exr(&hdr, &exr_path)?;
+
+    // Handle debug export if enabled (already handled by merge_from_files if debug_export is Some)
+
+    // Create log entry
+    let log_file = logs_dir.join(format!("rust_merge_set_{:03}.log", set_idx));
+    let mut log_content = Vec::new();
+    log_content.push(format!("=== Rust HDR Merge - Set {} ===", set_idx));
+    log_content.push(format!("Input files: {}", files.len()));
+    for (file, ev) in files.iter().zip(ev_values.iter()) {
+        log_content.push(format!("  {} (EV: {:.2})", file.display(), ev));
+    }
+    log_content.push(format!("Output file: {}", exr_path.display()));
+    log_content.push(format!("Processing time: {:.2?}", set_start.elapsed()));
+    log_content.push("✓ HDR merge completed using native Rust merger (Zaal algorithm).".to_string());
+
+    // Add internal log messages
+    for msg in log.get_messages() {
+        log_content.push(msg);
+    }
+
+    let mut log_file = std::fs::File::create(&log_file)
+        .map_err(|e| format!("Failed to create log file: {}", e))?;
+    for line in &log_content {
+        writeln!(log_file, "{}", line).map_err(|e| e.to_string())?;
+    }
+
+    println!("    [RUST_MERGE] Set {}: ✓ Complete (Time: {:.2}s)", 
+        set_idx, set_start.elapsed().as_secs_f32());
+
+    Ok(exr_path)
+}
+
+/// Save LinearImage to EXR file
+fn save_linear_image_to_exr(img: &LinearImage, output_path: &Path) -> Result<(), String> {
+    let width = img.width as usize;
+    let height = img.height as usize;
+    
+    // Create pixel buffer
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = img.get_pixel(x as u32, y as u32);
+            pixels.push((pixel[0], pixel[1], pixel[2]));
+        }
+    }
+
+    // Use exr crate's simple write function
+    exr::prelude::write_rgb_file(
+        &output_path.to_string_lossy().to_string(),
+        width,
+        height,
+        |x, y| {
+            let idx = y * width + x;
+            pixels[idx]
+        }
+    ).map_err(|e| format!("Failed to write EXR file: {}", e))?;
+
+    Ok(())
+}
