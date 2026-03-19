@@ -1,4 +1,4 @@
-### Unoptimised (cargo run debug)
+### Unoptimised (cargo run)
 test set.json \
 4 threads
 #### OpenCV Align + Blender Merge + OpenCV tonemap
@@ -16,11 +16,21 @@ test set.json \
 #### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
 37.39s
 
-### Serial refactor (unoptimised)
+### Serial refactor (unoptimised) (cargo run)
 
 #### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
 318.47s / 6m 3s - 8 threads \
 
-### Serial refactor (unoptimised)
+### Serial refactor (optimised) (cargo run --release)
 
 #### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
+53.98
+### Serial parallel (unoptimised) (cargo run)
+
+#### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
+105.05s / 2m 11s - 8 threads
+
+### Serial parallel (optimized) (cargo run --release)
+
+#### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
+25.10s - 8 threads

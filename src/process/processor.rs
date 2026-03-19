@@ -13,7 +13,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::Arc;
 use std::time::Instant;
+use rayon::prelude::*;
 
 use crate::config::{Config, FolderEntry, GuiSettings};
 
@@ -144,61 +146,73 @@ pub fn process_folder(
 
     // Start I/O worker for parallel disk operations
     let io_worker = IoWorker::new();
-
-    // Process each bracket set
-    let mut completed_sets = 0u32;
-    let mut errors = Vec::new();
+    let io_worker_arc = Arc::new(io_worker);
 
     // Group files by sets
     let bracket_count = folder.brackets as usize;
     let total_sets = folder.sets as usize;
 
-    for set_idx in 0..total_sets {
-        let set_start = Instant::now();
-        let start_idx = set_idx * bracket_count;
-        let end_idx = std::cmp::min(start_idx + bracket_count, folder.files.len());
-        let set_files: Vec<&crate::scan_folder::ScannedFile> = folder.files[start_idx..end_idx].iter().collect();
+    // Create work items for each set
+    let work_items: Vec<(usize, Vec<&crate::scan_folder::ScannedFile>)> = (0..total_sets)
+        .map(|set_idx| {
+            let start_idx = set_idx * bracket_count;
+            let end_idx = std::cmp::min(start_idx + bracket_count, folder.files.len());
+            let set_files: Vec<&crate::scan_folder::ScannedFile> = folder.files[start_idx..end_idx].iter().collect();
+            (set_idx, set_files)
+        })
+        .collect();
 
-        if set_files.len() != bracket_count {
-            errors.push(format!("Set {} has incorrect number of files", set_idx + 1));
-            continue;
-        }
+    // Process sets in parallel with configured thread count
+    let results: Vec<Result<(usize, usize), String>> = work_items
+        .par_iter()
+        .with_max_len(gui_settings.threads as usize)
+        .map(|(set_idx, set_files)| {
+            let set_start = Instant::now();
+            
+            println!(
+                "\n[SET {}/{}] Processing {} files...",
+                set_idx + 1, total_sets, set_files.len()
+            );
 
-        println!(
-            "\n[SET {}/{}] Processing {} files...",
-            set_idx + 1, total_sets, set_files.len()
-        );
-
-        // Process this bracket set
-        match process_single_set(
-            &set_files,
-            set_idx,
-            &merged_dir,
-            &jpg_folder,
-            &logs_dir,
-            &profile_path,
-            config,
-            gui_settings,
-            &io_worker,
-        ) {
-            Ok(_) => {
-                completed_sets += 1;
-                println!(
-                    "[SET {}/{}] ✓ Complete in {:.2}s",
-                    set_idx + 1, total_sets, set_start.elapsed().as_secs_f32()
-                );
+            // Process this bracket set
+            match process_single_set(
+                set_files,
+                *set_idx,
+                &merged_dir,
+                &jpg_folder,
+                &logs_dir,
+                &profile_path,
+                config,
+                gui_settings,
+                &io_worker_arc,
+            ) {
+                Ok(_) => {
+                    println!(
+                        "[SET {}/{}] ✓ Complete in {:.2}s",
+                        set_idx + 1, total_sets, set_start.elapsed().as_secs_f32()
+                    );
+                    Ok((*set_idx, 1))
+                }
+                Err(e) => {
+                    println!("  [SET {}/{}] ✗ Failed: {}", set_idx + 1, total_sets, e);
+                    Err(format!("Set {}: {}", set_idx + 1, e))
+                }
             }
-            Err(e) => {
-                errors.push(format!("Set {}: {}", set_idx + 1, e));
-                println!("  [SET {}/{}] ✗ Failed: {}", set_idx + 1, total_sets, e);
-            }
-        }
+        })
+        .collect();
+
+    // Shutdown I/O worker and wait for pending operations
+    {
+        let io_worker = Arc::try_unwrap(io_worker_arc)
+            .unwrap_or_else(|_| panic!("IoWorker still referenced"));
+        io_worker.shutdown();
     }
-
-    // Wait for all I/O operations to complete
-    io_worker.shutdown();
     // Give I/O thread time to finish
     std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Count results
+    let completed_sets = results.iter().filter(|r| r.is_ok()).count() as u32;
+    let errors: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
 
     // Cleanup if enabled
     if gui_settings.do_cleanup {
@@ -246,7 +260,7 @@ fn process_single_set(
     profile_path: &Option<String>,
     config: &Config,
     gui_settings: &GuiSettings,
-    io_worker: &IoWorker,
+    io_worker: &Arc<IoWorker>,
 ) -> Result<(), String> {
     let mut current_files: Vec<PathBuf>;
     let mut temp_files_to_cleanup: Vec<PathBuf> = Vec::new();
