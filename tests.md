@@ -10,9 +10,12 @@ test set.json \
 
 ### Optimised (cargo run --release)
 #### OpenCV Align + Blender Merge + OpenCV tonemap
-32.09
+32.09s - 4 threads \
+30.44s - 8 threads
 #### OpenCV Align + OpenCV Merge (Debevec) + OpenCV tonemap
-34.45
+34.45s - 4 threads \
+31.26s - 8 threads 
 #### OpenCV Align + Rust Merge (Zaal) + OpenCV tonemap
-37.39s
+37.39s - 4 threads \
+35.08s - 8 threads 
 
