@@ -575,20 +575,17 @@ impl SetupDialog {
             merge_radio_robertson,
             merge_radio_rust,
             toggle_rust_merge_debug,
-            horizontal_rule((1.0 * uiscale) as u16),
-            text("Tone Mapping Method:").size(14.0 * uiscale),
-            tonemap_radio_luminance,
-            tonemap_radio_opencv,
         ]
             .spacing(8.0 * uiscale)
-            .padding(10.0 * uiscale);
+            .padding(10.0 * uiscale)
+            .width(Length::FillPortion(2));
 
 
         // Tone Mapping Operator
         let current_choice = ToneMapChoice::from_operator(&self.tonemap_operator);
         
         let tonemap_column = column![
-            text("Tone Mapping Operator:").size(14.0 * uiscale),
+            text("Tone Mapping Operator:").size(16.0 * uiscale),
             radio("Reinhard", ToneMapChoice::Reinhard, Some(current_choice), |_| DialogMessage::TonemapOperatorSelected("Reinhard".to_string())).size(14.0 * uiscale),
             radio("Drago", ToneMapChoice::Drago, Some(current_choice), |_| DialogMessage::TonemapOperatorSelected("Drago".to_string())).size(14.0 * uiscale),
             radio("Durand", ToneMapChoice::Durand, Some(current_choice), |_| DialogMessage::TonemapOperatorSelected("Durand".to_string())).size(14.0 * uiscale),
@@ -597,7 +594,7 @@ impl SetupDialog {
 
         // Intensity
         let intensity_row = Row::new()
-            .push(text("Intensity:").size(16.0 * uiscale).center())
+            .push(text("Intensity:").size(14.0 * uiscale).width(100.0 * uiscale))
             .push(
                 text_input("Intensity", &self.tonemap_intensity_str)
                     .on_input(DialogMessage::TonemapIntensityChanged)
@@ -607,7 +604,7 @@ impl SetupDialog {
 
         // Contrast
         let contrast_row = Row::new()
-            .push(text("Contrast:").size(16.0 * uiscale))
+            .push(text("Contrast:").size(14.0 * uiscale).width(100.0 * uiscale))
             .push(
                 text_input("Contrast", &self.tonemap_contrast_str)
                     .on_input(DialogMessage::TonemapContrastChanged)
@@ -617,7 +614,7 @@ impl SetupDialog {
 
         // Saturation
         let saturation_row = Row::new()
-            .push(text("Saturation:").size(16.0 * uiscale))
+            .push(text("Saturation:").size(14.0 * uiscale).width(100.0 * uiscale))
             .push(
                 text_input("Saturation", &self.tonemap_saturation_str)
                     .on_input(DialogMessage::TonemapSaturationChanged)
@@ -626,13 +623,17 @@ impl SetupDialog {
             .spacing(10.0 * uiscale);
 
         let tonemap_params_column = column![
-            text("Tonemaping parametres:").center().size(14.0 * uiscale),
+            text("Tone Mapping Method:").size(16.0 * uiscale),
+            tonemap_radio_luminance,
+            tonemap_radio_opencv,
+            text("Tonemaping parametres:").center().size(16.0 * uiscale),
             intensity_row,
             contrast_row,
             saturation_row,
             tonemap_column
             
-        ].spacing(10.0 * uiscale);
+        ].spacing(10.0 * uiscale)
+            .width(Length::FillPortion(2));
 
 
         row![

@@ -103,22 +103,17 @@ impl ProfileManagerDialog {
 
         let profile_scroll = container(scrollable(profile_rows).height(Length::Fixed(300.0 * uiscale))).width(Length::Fill).height(Length::Fill).style(container::bordered_box);
         content = content.push(profile_scroll);
+        
+        content.into()
 
-        // content = content.push(horizontal_rule((20.0 * uiscale) as u16));
-
-        // Buttons
-
-
-
-
-        center_x(container(content)
-            .height(400.0 * uiscale)
-            .max_width(1000.0 * uiscale)
-            .padding(10.0 * uiscale)
-            .style(container::rounded_box))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        // center_x(container(content)
+        //     .height(400.0 * uiscale)
+        //     .max_width(1000.0 * uiscale)
+        //     .padding(10.0 * uiscale)
+        //     .style(container::rounded_box))
+        //     .width(Length::Fill)
+        //     .height(Length::Fill)
+            
     }
 }
 

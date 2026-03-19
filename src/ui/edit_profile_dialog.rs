@@ -72,6 +72,11 @@ impl EditProfileDialog {
     pub fn view(&self, uiscale: f32) -> Element<'_, EditProfileMessage> {
         let mut content = Column::new().spacing(8.0 * uiscale).padding(10.0 * uiscale);
 
+        // Title
+        let title = text("Edit Profile").size(16.0 * uiscale);
+        content = content.push(title);
+        content = content.push(horizontal_rule((2.0 * uiscale) as u16));
+
         // Name
         let name_row = Row::new()
             .push(text("Name:").width(Length::Fixed(80.0 * uiscale)))
@@ -107,7 +112,7 @@ impl EditProfileDialog {
             .spacing(10.0 * uiscale);
         content = content.push(tag_row);
 
-        content = content.push(horizontal_rule((20.0 * uiscale) as u16));
+        content = content.push(horizontal_rule((2.0 * uiscale) as u16));
 
         // Buttons
         let save_btn = button(text("Save").size(12.0 * uiscale)).on_press(EditProfileMessage::Save);
@@ -121,9 +126,11 @@ impl EditProfileDialog {
 
         content = content.push(buttons);
 
+        // Return as a side panel container
         container(content)
-            .width(Length::Fill)
+            .width(Length::Fixed(400.0 * uiscale))
             .height(Length::Fill)
+            .style(container::bordered_box)
             .into()
     }
 }

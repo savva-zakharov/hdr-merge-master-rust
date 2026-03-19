@@ -219,50 +219,83 @@ impl HdrMergeApp {
 
     fn handle_folder_selected(&mut self, path_opt: Option<String>) {
         if let Some(path_str) = path_opt {
-            // Check if already in batch
-            if self.batch_folders.iter().any(|f| f.path == path_str) {
-                return;
-            }
-
             let path = Path::new(&path_str);
-            
-            // Use the scan_folder module to scan the folder
-            let scan_result = crate::scan_folder::scan_folder(
-                path,
-                &self.config.gui_settings.processed_extensions,
-                &self.config.gui_settings.raw_extensions,
-            );
 
-            // Determine the primary extension from scanned files
-            let extension = scan_result
-                .files
-                .first()
-                .and_then(|f| Path::new(&f.path).extension())
-                .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
-                .unwrap_or_else(|| {
-                    self.config
-                        .gui_settings
-                        .processed_extensions
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| ".tiff".to_string())
-                });
+            if self.gui_settings.do_recursive {
+                // Recursive mode: scan for subfolders and add each one
+                let subfolders = crate::scan_folder::scan_folder_recursive(
+                    path,
+                    &self.config.gui_settings.processed_extensions,
+                    &self.config.gui_settings.raw_extensions,
+                    &self.config.gui_settings.recursive_ignore_folders,
+                    self.config.gui_settings.recursive_max_depth,
+                );
 
-            self.batch_folders.push(FolderEntry {
-                path: path_str,
-                profile: self
-                    .profiles
+                // Add each subfolder individually
+                for subfolder_path in subfolders {
+                    self.add_folder_entry(&subfolder_path);
+                }
+
+                // Also add the root folder if it contains images
+                let root_scan = crate::scan_folder::scan_folder(
+                    path,
+                    &self.config.gui_settings.processed_extensions,
+                    &self.config.gui_settings.raw_extensions,
+                );
+                if !root_scan.files.is_empty() {
+                    self.add_folder_entry(&path_str);
+                }
+            } else {
+                // Non-recursive mode: just add the selected folder
+                self.add_folder_entry(&path_str);
+            }
+        }
+    }
+
+    fn add_folder_entry(&mut self, path_str: &str) {
+        // Check if already in batch
+        if self.batch_folders.iter().any(|f| f.path == path_str) {
+            return;
+        }
+
+        let path = Path::new(path_str);
+
+        // Use the scan_folder module to scan the folder
+        let scan_result = crate::scan_folder::scan_folder(
+            path,
+            &self.config.gui_settings.processed_extensions,
+            &self.config.gui_settings.raw_extensions,
+        );
+
+        // Determine the primary extension from scanned files
+        let extension = scan_result
+            .files
+            .first()
+            .and_then(|f| Path::new(&f.path).extension())
+            .map(|ext| format!(".{}", ext.to_string_lossy().to_lowercase()))
+            .unwrap_or_else(|| {
+                self.config
+                    .gui_settings
+                    .processed_extensions
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| "Default".to_string()),
-                extension,
-                is_raw: scan_result.is_raw,
-                align: self.gui_settings.do_align,
-                brackets: scan_result.brackets,
-                sets: scan_result.sets,
-                files: scan_result.files,
+                    .unwrap_or_else(|| ".tiff".to_string())
             });
-        }
+
+        self.batch_folders.push(FolderEntry {
+            path: path_str.to_string(),
+            profile: self
+                .profiles
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Default".to_string()),
+            extension,
+            is_raw: scan_result.is_raw,
+            align: self.gui_settings.do_align,
+            brackets: scan_result.brackets,
+            sets: scan_result.sets,
+            files: scan_result.files,
+        });
     }
 
     fn export_batch(&mut self) -> Task<Message> {
@@ -348,19 +381,27 @@ impl HdrMergeApp {
         Task::perform(
             async move {
                 // Process folders in background
+                let start_time = std::time::Instant::now();
                 let _total = folders.len() as f32;
                 let mut processed = 0f32;
                 let mut errors = Vec::new();
-                
+
                 for folder in folders {
                     match process::process_folder(&folder, &config, &gui_settings) {
                         Ok(_) => processed += 1.0,
                         Err(err) => errors.push(format!("{}: {}", folder.path, err)),
                     }
                 }
-                
+
+                let elapsed = start_time.elapsed();
+                let elapsed_str = if elapsed.as_secs() >= 60 {
+                    format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+                } else {
+                    format!("{}.{:02}s", elapsed.as_secs(), elapsed.subsec_millis() / 10)
+                };
+
                 if errors.is_empty() {
-                    Ok(format!("Successfully processed {} folders", processed as i32))
+                    Ok(format!("Successfully processed {} folders in {}", processed as i32, elapsed_str))
                 } else {
                     Err(format!("Completed with errors: {}", errors.join("; ")))
                 }
@@ -648,12 +689,19 @@ impl HdrMergeApp {
                                 String::new(),
                             )
                         };
+                        // Close clear dialog when opening edit dialog
+                        self.clear_profiles_confirm_dialog.close();
                         self.edit_profile_dialog.open(index, &name, &path, &tag);
                     }
                     ProfileMessage::ClearAll => {
+                        // Close edit dialog when opening clear dialog
+                        self.edit_profile_dialog.close();
                         self.clear_profiles_confirm_dialog.open();
                     }
                     ProfileMessage::Close => {
+                        // Close both edit and clear dialogs when closing profile manager
+                        self.edit_profile_dialog.close();
+                        self.clear_profiles_confirm_dialog.close();
                         self.profile_manager_dialog.close();
                     }
                     ProfileMessage::NameEdit(value, index) => {
@@ -799,18 +847,18 @@ impl HdrMergeApp {
         let mut content = Column::new().spacing(8.0 * self.uiscale).padding(6.0 * self.uiscale);
 
         // ========== Batch Folders Section ==========
-        let folders_label = text("Input Folders:").size(14.0 * self.uiscale);
 
         let mut folder_rows = Column::new().spacing(4.0 * self.uiscale);
 
         // Header row
         let header = Row::new()
-            .push(text("Folder").size(12.0 * self.uiscale).width(Length::Fill))
+            .push(text("Input Folders:").size(12.0 * self.uiscale).width(Length::Fill))
             .push(text("Profile").size(12.0 * self.uiscale).width(150.0 * self.uiscale))
             .push(text("Ext").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("RAW").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .push(text("Align").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
-            .push(text("Brackets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Files").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+            .push(text("Brackets").size(12.0 * self.uiscale).width(60.0 * self.uiscale))
             .push(text("Sets").size(12.0 * self.uiscale).width(50.0 * self.uiscale))
             .spacing(6.0 * self.uiscale)
             .padding([4.0 * self.uiscale, 6.0 * self.uiscale]);
@@ -840,8 +888,9 @@ impl HdrMergeApp {
                 .push(text(&folder.extension).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .push(text(if folder.is_raw { "Yes" } else { "No" }).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .push(container(checkbox(folder.align).on_toggle(move |value| Message::ToggleFolderAlign(i, value))).width(50.0 * self.uiscale))
-                .push(text(folder.brackets.to_string()).width(50.0 * self.uiscale).size(12.0 * self.uiscale))
-                .push(text(format!("{} files", folder.files.len())).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+                .push(text(folder.files.len().to_string()).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
+                .push(text(folder.brackets.to_string()).size(12.0 * self.uiscale).width(60.0 * self.uiscale))
+                .push(text(folder.sets.to_string()).size(12.0 * self.uiscale).width(50.0 * self.uiscale))
                 .spacing(6.0 * self.uiscale)
                 .padding([4.0 * self.uiscale, 6.0 * self.uiscale]);
             folder_rows= folder_rows.push(horizontal_rule(2));
@@ -872,7 +921,7 @@ impl HdrMergeApp {
             ).spacing(6.0 * self.uiscale);
 
 
-        content = content.push(Column::new().push(folders_label).push(folders_section).spacing(8.0 * self.uiscale));
+        content = content.push(Column::new().push(folders_section).spacing(8.0 * self.uiscale));
 
 
         content = content.push(horizontal_rule((2.0 * self.uiscale) as u16));
@@ -1043,13 +1092,81 @@ impl HdrMergeApp {
         }
 
         if self.profile_manager_dialog.show {
+            // Profile manager with optional side panels for edit/clear dialogs
+            if self.edit_profile_dialog.show {
+                // Show profile manager with edit dialog as side panel in same row
+                let profile_manager_content = self.profile_manager_dialog.view(
+                    &self.profiles,
+                    &self.config.pp3_profiles,
+                    self.uiscale,
+                ).map(Message::ProfileManagerMsg);
+                
+                let edit_panel = self.edit_profile_dialog.view(self.uiscale).map(Message::EditProfileMsg);
+
+                let profile_panel = Row::new()
+                    .push(profile_manager_content)
+                    .push(edit_panel)
+                    .spacing(10.0 * self.uiscale);
+                
+                return container(
+                    Column::new()
+                        .push(main_content)
+                        .push(
+                            Container::new(profile_panel)
+                                .width(Length::Fill)
+                                .style(container::rounded_box)
+                                .padding(10.0 * self.uiscale),
+                        )
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+            }
+            
+            if self.clear_profiles_confirm_dialog.show {
+                // Show profile manager with clear dialog as side panel in same row
+                let profile_manager_content = self.profile_manager_dialog.view(
+                    &self.profiles,
+                    &self.config.pp3_profiles,
+                    self.uiscale,
+                ).map(Message::ProfileManagerMsg);
+                
+                let clear_panel = self.clear_profiles_confirm_dialog.view(self.uiscale).map(Message::ClearProfilesMsg);
+
+                let profile_panel = Row::new()
+                    .push(profile_manager_content)
+                    .push(clear_panel)
+                    .spacing(10.0 * self.uiscale);
+                
+                return container(
+                    Column::new()
+                        .push(main_content)
+                        .push(
+                            Container::new(profile_panel)
+                                .width(Length::Fill)
+                                .style(container::rounded_box)
+                                .padding(10.0 * self.uiscale)
+                        )
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+            }
+            
+            // Just profile manager, no side panels
             return container(
                 Column::new()
                     .push(main_content)
                     .push(
-                        container(self.profile_manager_dialog.view(&self.profiles, &self.config.pp3_profiles, self.uiscale).map(Message::ProfileManagerMsg))
+                        Container::new(self.profile_manager_dialog.view(
+                            &self.profiles,
+                            &self.config.pp3_profiles,
+                            self.uiscale,
+                        ).map(Message::ProfileManagerMsg))
                             .width(Length::Fill)
-                            .height(Length::Fill),
+                            .style(container::rounded_box)
+                            .padding(10.0 * self.uiscale)
+                        ,
                     )
             )
             .width(Length::Fill)
@@ -1062,9 +1179,12 @@ impl HdrMergeApp {
                 Column::new()
                     .push(main_content)
                     .push(
-                        container(self.edit_profile_dialog.view(self.uiscale).map(Message::EditProfileMsg))
-                            .width(Length::Fill)
-                            .height(Length::Fill),
+                        Container::new(container(self.edit_profile_dialog.view(self.uiscale)
+                            .map(Message::EditProfileMsg))
+                           .width(Length::Fill)
+                           .style(container::rounded_box)
+                                           .padding(10.0 * self.uiscale)
+                           ,)
                     )
             )
             .width(Length::Fill)

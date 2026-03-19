@@ -229,6 +229,123 @@ pub fn scan_folder(
     }
 }
 
+/// Scan a folder recursively for subfolders containing image files
+///
+/// # Arguments
+/// * `folder_path` - Path to the root folder to scan
+/// * `processed_extensions` - List of processed file extensions
+/// * `raw_extensions` - List of raw file extensions
+/// * `ignore_folders` - List of folder names to ignore
+/// * `max_depth` - Maximum depth to recurse (1 = immediate subfolders only)
+///
+/// # Returns
+/// A vector of paths to subfolders that contain image files
+pub fn scan_folder_recursive(
+    folder_path: &Path,
+    processed_extensions: &[String],
+    raw_extensions: &[String],
+    ignore_folders: &[String],
+    max_depth: u32,
+) -> Vec<String> {
+    let mut result_folders = Vec::new();
+    
+    scan_folder_recursive_helper(
+        folder_path,
+        processed_extensions,
+        raw_extensions,
+        ignore_folders,
+        max_depth,
+        0,
+        &mut result_folders,
+    );
+    
+    result_folders
+}
+
+/// Helper function for recursive folder scanning
+fn scan_folder_recursive_helper(
+    folder_path: &Path,
+    processed_extensions: &[String],
+    raw_extensions: &[String],
+    ignore_folders: &[String],
+    max_depth: u32,
+    current_depth: u32,
+    result_folders: &mut Vec<String>,
+) {
+    // Stop if we've reached max depth
+    if current_depth >= max_depth {
+        return;
+    }
+
+    if let Ok(entries) = fs::read_dir(folder_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            
+            if !path.is_dir() {
+                continue;
+            }
+
+            // Get folder name for ignore check
+            if let Some(folder_name) = path.file_name() {
+                let folder_name_str = folder_name.to_string_lossy().to_lowercase();
+                
+                // Check if this folder should be ignored
+                if ignore_folders.iter().any(|ignore| {
+                    ignore.to_lowercase() == folder_name_str
+                }) {
+                    continue;
+                }
+            }
+
+            // Check if this folder contains image files
+            let contains_images = folder_contains_images(&path, processed_extensions, raw_extensions);
+            
+            if contains_images {
+                // Add this folder to results
+                result_folders.push(path.to_string_lossy().to_string());
+            }
+
+            // Recurse into subfolder
+            scan_folder_recursive_helper(
+                &path,
+                processed_extensions,
+                raw_extensions,
+                ignore_folders,
+                max_depth,
+                current_depth + 1,
+                result_folders,
+            );
+        }
+    }
+}
+
+/// Check if a folder contains image files (without reading EXIF)
+fn folder_contains_images(
+    folder_path: &Path,
+    processed_extensions: &[String],
+    raw_extensions: &[String],
+) -> bool {
+    if let Ok(entries) = fs::read_dir(folder_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    let ext_lower = ext.to_string_lossy().to_lowercase();
+                    let ext_with_dot = format!(".{}", ext_lower);
+
+                    let is_processed = processed_extensions.iter().any(|e| e.to_lowercase() == ext_with_dot);
+                    let is_raw = raw_extensions.iter().any(|e| e.to_lowercase() == ext_with_dot);
+                    
+                    if is_processed || is_raw {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
